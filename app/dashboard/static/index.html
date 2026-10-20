@@ -1,0 +1,99 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Overview · Quantara</title><link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css"></head>
+<body data-page="overview"><header id="hdr"></header>
+<main>
+  <div id="banner" class="banner"></div>
+
+  <!-- The one thing worth reading first: a sentence saying whether it is trading, and what the money did. -->
+  <section id="hero" class="hero"></section>
+
+  <div class="grid two section">
+    <div class="card">
+      <h3>Account value over time</h3>
+      <p class="lede">What the account is worth, including trades still open.
+        <select id="eqh" style="float:right"><option value="24">Last 24 hours</option><option value="168" selected>Last 7 days</option><option value="720">Last 30 days</option><option value="8760">Last year</option></select></p>
+      <canvas id="equity"></canvas>
+    </div>
+    <div class="card">
+      <h3>Open right now</h3>
+      <p class="lede">Where each trade sits between its stop and its target.</p>
+      <div id="openPositions" class="poslist scroll"></div>
+    </div>
+  </div>
+
+  <section class="card section">
+    <h3>Why it is not trading more</h3>
+    <p class="lede">Every chance the bot looked at today, and where they dropped out. Most stop at the first
+      step, which is normal — the rules are meant to be picky.</p>
+    <div id="funnel" class="funnel"></div>
+    <div id="funnelReasons" class="reasons"></div>
+  </section>
+
+  <section class="card section">
+    <h3>Symbols</h3>
+    <p class="lede">Click a symbol to start or stop new trades on it. Stopping leaves open positions alone —
+      they keep their stop and target at the broker.</p>
+    <div id="symbolTiles" class="tiles"></div>
+  </section>
+
+  <div class="grid half section">
+    <div class="card">
+      <h3>How much it is allowed to risk</h3>
+      <p class="lede">Limits tighten automatically as the account falls from its best level.</p>
+      <div id="risk"></div>
+    </div>
+    <div class="card">
+      <h3>Trades it skipped</h3>
+      <p class="lede">The bot follows blocked signals on paper to see whether blocking them was right.</p>
+      <div id="cf"></div>
+    </div>
+  </div>
+
+  <details class="tech">
+    <summary>System checks <small>— connection, data, database, order sending</small></summary>
+    <div class="body"><div id="health"></div><div id="statusReasons" class="section"></div></div>
+  </details>
+
+  <details class="tech">
+    <summary>News trading <small>— orders placed either side of big economic releases</small></summary>
+    <div class="body"><div id="straddle" class="scroll"></div>
+      <div class="note">Before a high-impact release the bot places one buy order above the price and one sell
+        order below it. Whichever the news triggers becomes the trade; the other is cancelled automatically.
+        It stands down if the buy/sell gap blows out beforehand.</div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Self-adjusting settings <small>— how the bot retunes itself each hour</small></summary>
+    <div class="body"><div id="adaptive" class="scroll"></div>
+      <div class="note">Each hour the bot re-measures how much each symbol is moving and how wide its buy/sell
+        gap usually is, then adjusts the news-order distances and the gap ceiling to match. Position sizes and
+        risk limits are never adjusted this way — those stay exactly where you set them.</div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Market hours <small>— when each symbol opens and closes</small></summary>
+    <div class="body"><div id="marketHours" class="scroll"></div>
+      <div class="note">Weekend reopen times are estimates from the configured schedule. Your broker's actual
+        hours, holidays and individual contract sessions may differ.</div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Trading rules <small>— the eight strategies and how each is doing</small></summary>
+    <div class="body"><div id="strats" class="scroll"></div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Order flow measurements <small>— research only, never used to block a trade</small></summary>
+    <div class="body"><div id="micro" class="scroll"></div>
+      <div class="note">Estimates built from the quote stream, because MT5 CFDs carry no real trade tape:
+        buying versus selling pressure, bursts of activity, distance from the average traded price, and a
+        measure of one-sided flow. Recorded for later study. Nothing here stops or starts a trade.</div></div>
+  </details>
+
+  <div id="acct" class="grid cards section"></div>
+</main><script src="/static/glossary.js"></script><script src="/static/app.js"></script></body></html>

@@ -1,0 +1,123 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Analysis · Quantara</title><link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css"></head>
+<body data-page="analysis"><header id="hdr"></header>
+<main>
+  <div id="banner" class="banner"></div>
+
+  <div class="card"><h3>Where the money went</h3>
+    <p class="lede">Every losing trade, what the bot saw before it took it, and how far it went the right way
+      before it turned. If a trade was well ahead before it lost, that is a sign the exit is the problem.</p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="mut">Showing</span>
+      <select id="lhours"><option value="24">today</option><option value="168" selected>last 7 days</option><option value="720">last 30 days</option></select>
+      <button class="btn" id="areload">Reload</button></div>
+    <div id="lsum" class="note" style="font-size:13px;margin:0 0 10px"></div>
+    <div id="ltable" class="scroll" style="max-height:45vh"></div></div>
+
+  <div class="card"><h3>Trades it decided not to take</h3>
+    <p class="lede">Signals that looked fine on the chart but were stopped by a safety, cost or risk check.
+      Tick the box to see only the ones the bot itself calculated as worth taking — those are the ones where
+      a rule may be costing you money rather than saving it.</p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="mut">Showing</span>
+      <select id="bhours"><option value="6">last 6 hours</option><option value="48" selected>last 2 days</option><option value="168">last 7 days</option></select>
+      <label class="inline"><input type="checkbox" id="bonly"> only ones it calculated as profitable</label></div>
+    <div id="bsum" class="note" style="font-size:13px;margin:0 0 10px"></div>
+    <div id="btable" class="scroll" style="max-height:55vh"></div></div>
+
+  <div class="card"><h3>Does it work better at some hours than others?</h3>
+    <p class="lede">Every finished trade grouped by trading session. This is the one question worth asking of
+      live results that does not require a new rule — it filters the rules you already have. A session needs
+      about thirty trades before its number means anything, and sessions below that are shown but not judged.</p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="mut">Showing</span>
+      <select id="sesshours"><option value="168">last 7 days</option><option value="720" selected>last 30 days</option><option value="2160">last 90 days</option><option value="8760">last year</option></select>
+      <span class="mut">Symbol</span><select id="sesssym"><option value="">all symbols</option></select>
+      <label class="inline" id="sessexclwrap" hidden><input type="checkbox" id="sessexcl" checked>
+        <span id="sessexcllbl">leave out rules that are switched off</span></label>
+    </div>
+    <div class="note" id="sessexclnote" style="font-size:13px;margin:0 0 10px" hidden></div>
+    <div id="sessverdict" class="note" style="font-size:13.5px;margin:0 0 12px"></div>
+    <div id="sesstable" class="scroll"></div>
+    <details class="tech" style="margin-top:12px"><summary>By hour of day <small>— a finer grain, needs far more trades to mean anything</small></summary>
+      <div class="body"><div id="hourtable" class="scroll"></div></div></details>
+  </div>
+
+  <div class="card"><h3>How the whole book is doing</h3>
+    <p class="lede">The strategies judged together rather than one at a time. A rule that wins 70% of the
+      time but loses on exactly the days everything else loses is worth less than one that wins when the
+      rest are down — and no per-rule table can show that.</p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="mut">Showing</span>
+      <select id="pfhours"><option value="168">last 7 days</option><option value="720" selected>last 30 days</option><option value="2160">last 90 days</option><option value="8760">last year</option></select>
+      <span class="mut">Group losses by</span>
+      <select id="pfbucket"><option value="D" selected>day</option><option value="W">week</option></select>
+    </div>
+    <div id="pfhead"></div>
+    <div id="pfco" class="note" style="font-size:13px;margin:12px 0 10px"></div>
+    <div id="pftable" class="scroll"></div>
+    <div class="note">“Cushions drawdown” means removing that rule would make the worst losing stretch
+      <em>deeper</em> — it was winning while the others lost. A rule can lose money overall and still be
+      worth keeping for that reason, which is the whole point of looking at the book instead of the parts.</div>
+  </div>
+
+  <div class="card"><h3>Which rule is actually working</h3>
+    <p class="lede">Every trading rule over the last 30 days. Rules in watch-only mode place no orders, so
+      they are judged on signals followed to their stop or target on paper. Fewer than about thirty results
+      means a number here is noise, not evidence.</p>
+    <div id="stable" class="scroll"></div></div>
+
+  <details class="tech" open>
+    <summary>Backtests on real history <small>— does each rule survive data it was not tuned on?</small></summary>
+    <div class="body">
+      <div class="note" style="margin:0 0 10px">A separate background process replays the bot's own entry
+        rules over recent price history, tries many stop and target combinations, picks the best on the first
+        70% of the data, then scores that choice on the last 30% it never saw. Surviving that is the only
+        result worth anything. Where even the best setting loses clearly, the rule is blocked on that symbol
+        until a newer run says otherwise.</div>
+      <div id="rtable" class="scroll" style="max-height:45vh"></div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Is a slower chart cheaper? <small>— the same rule on 1, 5 and 15-minute candles</small></summary>
+    <div class="body">
+      <div class="note" style="margin:0 0 10px">The same entry rule tested on three speeds, charged real
+        spreads taken from actual ticks plus any commission. Slower candles mean wider stops, and a wider stop
+        makes the broker's buy/sell gap a smaller share of each trade — which is usually where the money goes.
+        "Walk-forward" is the strict test: tune on the past, trade the next slice untouched, repeat.</div>
+      <div id="tftable" class="scroll" style="max-height:45vh"></div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Why each rule fires as rarely as it does</summary>
+    <div class="body">
+      <div class="note" style="margin:0 0 10px">Each rule replayed over every finished candle, counting which
+        of its conditions stops it most often. A rule that almost never fires is a finding, not automatically
+        a fault — a rule loosened until it trades is a rule fitted to the past.</div>
+      <div id="ftable" class="scroll" style="max-height:45vh"></div></div>
+  </details>
+
+  <details class="tech">
+    <summary>Entry rules under test <small>— research only, these never place an order</small></summary>
+    <div class="body">
+      <div class="note" style="margin:0 0 10px">Five alternative entry ideas scored on the same history, the
+        same real costs and the same minimum-stop rule as the live ones. None of them can trade. A rule is
+        only written up as a live strategy after it survives walk-forward on two or more symbols.</div>
+      <div id="htable" class="scroll" style="max-height:55vh"></div></div>
+  </details>
+
+  <details class="tech">
+    <summary>The learned filter <small>— a model that scores each signal before it is taken</small></summary>
+    <div class="body">
+      <div class="note" style="margin:0 0 10px">Trained on every signal the bot ever recorded and what
+        happened next, using the oldest 70% to learn and the newest 30% to mark its own homework. It is only
+        allowed to block anything while, on that unseen 30%, the signals it keeps genuinely beat taking
+        everything. Otherwise it just writes a score beside each signal and changes nothing.</div>
+      <div id="mltable" class="scroll"></div></div>
+  </details>
+</main><script src="/static/glossary.js"></script><script src="/static/app.js"></script></body></html>

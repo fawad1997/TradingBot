@@ -1,0 +1,16 @@
+datetime_utc,currency,impact,title
+# Times are UTC. FOMC statements are 14:00 New York time (18:00 UTC in US summer time, 19:00 UTC in winter).
+# FOMC dates below are from federalreserve.gov/monetarypolicy/fomccalendars.htm - re-check before relying on them.
+# ADD every high-impact USD release you care about (CPI, PCE, NFP, unemployment, GDP, PMI, Fed speeches)
+# from the official calendars (bls.gov/schedule, bea.gov/news/schedule) or your broker's economic calendar,
+# then run:  python -m app.main import-events config/economic_events.csv
+2026-10-28 18:00,USD,HIGH,FOMC statement and rate decision
+2026-12-09 19:00,USD,HIGH,FOMC statement and rate decision
+2027-01-27 19:00,USD,HIGH,FOMC statement and rate decision
+2027-03-17 18:00,USD,HIGH,FOMC statement and rate decision
+2027-04-28 18:00,USD,HIGH,FOMC statement and rate decision
+2027-06-09 18:00,USD,HIGH,FOMC statement and rate decision
+2027-07-28 18:00,USD,HIGH,FOMC statement and rate decision
+2027-09-15 18:00,USD,HIGH,FOMC statement and rate decision
+2027-10-27 18:00,USD,HIGH,FOMC statement and rate decision
+2027-12-08 19:00,USD,HIGH,FOMC statement and rate decision

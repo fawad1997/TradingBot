@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Settings · Quantara</title><link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css"></head>
+<body data-page="config"><header id="hdr"></header>
+<main>
+  <div id="banner" class="banner"></div>
+  <div class="grid half">
+    <div class="card"><h3>What this bot is set up to do</h3>
+      <p class="lede">The account type, which symbols it watches, and which optional parts are on.</p>
+      <div id="envinfo"></div></div>
+    <div class="card"><h3>Controls</h3>
+      <p class="lede">Everything here takes effect immediately and is written to the audit trail.</p>
+      <div id="killstate"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn amber" id="a_halt">Stop or resume new trades</button>
+        <button class="btn green" id="a_force_resume">Re-check everything and resume</button>
+        <button class="btn red" id="a_close">Close all positions…</button>
+        <button class="btn" id="a_recon">Check against the broker now</button>
+        <button class="btn" id="a_events">Reload the news calendar</button>
+        <button class="btn" id="a_token">Forget my password on this browser</button>
+      </div>
+      <div class="note">Stopping affects new trades only. Anything already open keeps its stop and target at the broker and is still managed normally. Closing positions is a separate, deliberate action.</div>
+    </div>
+  </div>
+  <div class="card section status-card"><h3>Why trading is or is not running</h3><div id="configStatusReasons"></div></div>
+  <div class="card section"><h3>How strictly it is judging itself</h3>
+    <p class="lede">Settings that decide what gets refused. A setting that quietly does nothing is worse
+    than no setting at all, because it reads like a control — so anything here that is not actually
+    restricting something says so.</p>
+    <div id="integrity"></div>
+    <div class="card section" style="margin-top:14px;background:var(--raised)">
+      <h4 style="margin:0 0 8px">Before real money</h4>
+      <div id="readiness"></div>
+      <div class="note">These are decisions, not measurements. Nothing has to be collected first — each one
+      is a choice that is reasonable on a practice account and not reasonable on a funded one.</div>
+    </div></div>
+  <div class="card section"><h3>Trading rules</h3>
+    <p class="lede">Switch a rule on or off. Which account a rule is cleared for can only be changed by running the promotion command, which records the evidence behind the decision.</p>
+    <div id="cstrats" class="scroll"></div>
+    <div class="note">Turning a rule off here is immediate and recorded. It does not close anything already open.</div></div>
+  <div class="card section"><h3>Settings you can change while it runs</h3>
+    <p class="lede">Everything else needs a file edit and a restart, on purpose.</p>
+    <div id="params" class="scroll"></div>
+    <div class="note">Every change needs a reason, is checked against the hard safety ceilings before it is accepted, and is written to the change history below. The trading rules themselves can never be edited from a browser.</div></div>
+  <div class="card section"><h3>What has been changed, and by whom</h3><div id="hist" class="scroll"></div></div>
+</main><script src="/static/glossary.js"></script><script src="/static/app.js"></script></body></html>

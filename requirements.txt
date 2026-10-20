@@ -1,0 +1,16 @@
+# Quantara - Python 3.10+ (3.12 64-bit recommended), Windows for live trading
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
+numpy>=1.26
+pandas>=2.1
+pydantic>=2.6
+python-dotenv>=1.0
+psycopg[binary]>=3.1
+starlette>=0.37
+uvicorn[standard]>=0.29
+requests>=2.31
+tzdata>=2024.1
+vectorbt>=0.26
+backtrader>=1.9.78
+optuna>=3.6           # research lab: walk-forward parameter search
+lightgbm>=4.3         # learned trade filter
+scikit-learn>=1.4     # used by lightgbm's classifier interface

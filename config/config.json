@@ -1,0 +1,388 @@
+{
+  "_comment": "Runtime configuration for Quantara. environment: DRY_RUN (paper fills on live MT5 data) | SHADOW (signals only) | DEMO (orders on a demo account). REAL order execution is disabled in this release. Risk numbers are CEILINGS, not targets.",
+  "environment": "DRY_RUN",
+  "broker": {
+    "symbol_candidates": [
+      "XAUUSDm",
+      "XAUUSD247m",
+      "BTCUSDm",
+      "ETHUSDm",
+      "XNGUSDm",
+      "EURUSDm",
+      "GBPUSDm",
+      "GBPJPYm",
+      "NVDAm",
+      "TSLAm",
+      "AAPLm",
+      "AMZNm",
+      "MSFTm"
+    ],
+    "magic_number": 20260101,
+    "broker_utc_offset_hours": null,
+    "connect_timeout_ms": 60000,
+    "reconnect_max_attempts": 10,
+    "always_open_symbols": [
+      "XAUUSD247m"
+    ]
+  },
+  "sessions": {
+    "windows": [
+      {
+        "name": "ROLLOVER",
+        "start_utc": 21.0,
+        "end_utc": 22.0
+      },
+      {
+        "name": "ASIA",
+        "start_utc": 22.0,
+        "end_utc": 7.0
+      },
+      {
+        "name": "LONDON",
+        "start_utc": 7.0,
+        "end_utc": 12.0
+      },
+      {
+        "name": "LONDON_NY_OVERLAP",
+        "start_utc": 12.0,
+        "end_utc": 16.0
+      },
+      {
+        "name": "NEW_YORK",
+        "start_utc": 16.0,
+        "end_utc": 21.0
+      }
+    ],
+    "weekend_open_minutes": 120
+  },
+  "hydration": {
+    "ema_warmup_multiple": 5.0,
+    "warmup_bars": 100,
+    "safety_margin": 0.25,
+    "timeframes": [
+      "H4",
+      "H1",
+      "M15",
+      "M5"
+    ],
+    "min_bars": 300
+  },
+  "spread_gate": {
+    "symbol_max_spread_points": {
+      "AAPLm": 40,
+      "AMZNm": 40,
+      "BTCUSDm": 1000,
+      "ETHUSDm": 200,
+      "EURUSDm": 20,
+      "GBPJPYm": 45,
+      "GBPUSDm": 20,
+      "MSFTm": 70,
+      "NVDAm": 40,
+      "TSLAm": 30,
+      "XNGUSDm": 200
+    },
+    "max_spread_points": 300,
+    "max_spread_percentile": 0.95,
+    "min_samples_for_percentile": 300,
+    "wait_for_spread": true,
+    "dynamic_ceiling": true,
+    "dynamic_multiple": 1.5,
+    "dynamic_max_expansion": 3.0,
+    "dynamic_min_samples": 200
+  },
+  "execution": {
+    "max_signal_age_sec": 120,
+    "max_entry_drift_frac_of_stop": 0.25,
+    "quick_profit_close_money": 0.0,
+    "profit_lock_floor_money": 0.05,
+    "profit_lock_stop_buffer_points": 3.0,
+    "protection_safety_buffer_points": 5.0,
+    "sl_modification_cooldown_sec": 5.0,
+    "hard_profit_target_money": 0.0,
+    "small_win_activation_money": 0.2,
+    "small_win_floor_money": 0.05,
+    "ambition_activation_money": 0.9,
+    "ambition_floor_money": 0.5,
+    "deviation_points": 30,
+    "revalidated_retry_on_requote": true,
+    "allow_limit_orders": false,
+    "limit_order_ttl_sec": 600,
+    "close_unprotected_position": true,
+    "position_sync_sec": 2.0,
+    "reconcile_interval_sec": 30.0,
+    "profit_giveback_fraction": 0.3,
+    "close_when_profit_lock_unprotectable": false,
+    "small_win_activation_r": 0.5,
+    "small_win_floor_r": 0.1,
+    "ambition_activation_r": 0.8,
+    "ambition_floor_r": 0.4,
+    "min_sl_step_r": 0.02,
+    "profit_lock_cost_multiple": 1.5,
+    "peak_persist_step_r": 0.02
+  },
+  "cost": {
+    "commission_per_lot_round_trip": 0.0,
+    "default_slippage_points": 5.0,
+    "slippage_sample_min": 20,
+    "max_cost_fraction_of_risk": 0.25,
+    "cost_buffer_r": 0.05,
+    "max_spread_fraction_of_stop": 0.1,
+    "symbol_commission_per_lot_round_trip": {}
+  },
+  "risk": {
+    "max_risk_fraction_per_trade": 0.015,
+    "research_risk_fraction": 0.01,
+    "kelly_fraction": 0.25,
+    "kelly_shrinkage_trades": 100,
+    "max_total_open_risk_fraction": 0.1,
+    "correlation_lookback_days": 30,
+    "correlation_min_samples": 400,
+    "correlation_threshold": 0.7,
+    "correlation_group_fraction": 0.5,
+    "max_concurrent_positions": 10,
+    "loss_reduction_after": 2,
+    "loss_reduction_multiplier": 0.5,
+    "loss_circuit_breaker_losses": 3,
+    "loss_circuit_breaker_window_minutes": 180,
+    "loss_circuit_breaker_cooldown_minutes": 0,
+    "max_margin_usage_fraction": 0.5,
+    "min_margin_level_after_pct": 300.0,
+    "daily_loss_limit_fraction": 0.05,
+    "dd_reduced": 0.1,
+    "dd_restricted": 0.15,
+    "dd_no_new_trades": 0.2,
+    "dd_emergency": 0.3,
+    "reduced_multiplier": 0.5,
+    "restricted_multiplier": 0.25,
+    "high_vol_multiplier": 0.5,
+    "max_volume": 1.0,
+    "dd_recovery_band": 0.01
+  },
+  "events": {
+    "mode": "block",
+    "pre_minutes": 30,
+    "event_minutes": 15,
+    "post_minutes": 30,
+    "impacts": [
+      "HIGH"
+    ],
+    "currencies": [
+      "USD"
+    ],
+    "stale_after_days": 10
+  },
+  "calendar_sync": {
+    "enabled": true,
+    "url": "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+    "refresh_minutes": 60,
+    "timeout_seconds": 10.0
+  },
+  "news_straddle": {
+    "enabled": true,
+    "symbols": [
+      "XAUUSDm",
+      "XAUUSD247m",
+      "BTCUSDm",
+      "ETHUSDm",
+      "XNGUSDm",
+      "EURUSDm",
+      "GBPUSDm",
+      "GBPJPYm",
+      "NVDAm",
+      "TSLAm",
+      "AAPLm",
+      "AMZNm",
+      "MSFTm"
+    ],
+    "arm_minutes_before": 5.0,
+    "expire_after_event_minutes": 5.0,
+    "entry_distance_atr": 0.5,
+    "sl_atr": 1.0,
+    "tp_atr": 2.0,
+    "leg_risk_share": 0.25,
+    "max_atr_quote_age_sec": 10.0,
+    "max_armed_symbols": 13
+  },
+  "adaptive": {
+    "enabled": true,
+    "interval_minutes": 60,
+    "lookback_bars": 200,
+    "atr_short_bars": 16,
+    "atr_long_bars": 96,
+    "scale_min": 0.75,
+    "scale_max": 1.5,
+    "max_step": 0.15,
+    "spread_min_samples": 100,
+    "spread_p90_mult": 1.5
+  },
+  "counterfactual": {
+    "enabled": true,
+    "max_holding_bars": 96
+  },
+  "health": {
+    "stale_tick_sec": 30.0,
+    "spread_shock_multiple": 3.0,
+    "latency_warn_ms": 800.0,
+    "max_tick_jump_atr": 3.0,
+    "exec_failure_cluster": 3,
+    "weekend_stale_tick_sec": 300.0,
+    "market_closed_quote_age_sec": 180.0
+  },
+  "research": {
+    "counterfactual_enabled": true,
+    "shadow_strategies_enabled": true,
+    "ai_enabled": false,
+    "ml_enabled": false
+  },
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "paper": {
+    "starting_balance": 100.0,
+    "slippage_points": 3.0
+  },
+  "config_version": 1,
+  "display": {
+    "timezone": "Asia/Karachi"
+  },
+  "microstructure": {
+    "enabled": true,
+    "bucket_ticks": 50,
+    "vpin_buckets": 20,
+    "window_ticks": 200,
+    "burst_z": 2.5,
+    "bin_points": 20.0,
+    "depth_enabled": true,
+    "attach_to_signals": true
+  },
+  "scaling": {
+    "enabled": true,
+    "max_positions_per_symbol": 3,
+    "min_open_r": 0.5,
+    "risk_multiplier": 0.5
+  },
+  "research_lab": {
+    "enabled": true,
+    "interval_minutes": 240,
+    "startup_delay_seconds": 120.0,
+    "symbols": [],
+    "days_m1": 60,
+    "days_m15": 90,
+    "sl_atr_grid": [
+      1.0,
+      1.5,
+      2.0,
+      3.0
+    ],
+    "rr_grid": [
+      1.0,
+      1.5,
+      2.0,
+      3.0
+    ],
+    "train_fraction": 0.7,
+    "min_trades": 30,
+    "run_backtrader": true,
+    "gate_live": true,
+    "gate_strategies": [
+      "micro_scalper"
+    ],
+    "gate_block_below_r": -0.05,
+    "gate_min_trades": 30,
+    "gate_max_age_hours": 48.0,
+    "tick_spread_days": 60,
+    "timeframes": [
+      "M1",
+      "M5",
+      "M15"
+    ],
+    "optuna_enabled": true,
+    "optuna_trials": 40,
+    "optuna_folds": 4,
+    "gate_unseen_alone": true,
+    "hypotheses": [
+      "breakout_retest",
+      "momentum_trend",
+      "session_breakout",
+      "vwap_reversion",
+      "htf_continuation"
+    ],
+    "hypothesis_timeframes": [
+      "M1",
+      "M5",
+      "M15"
+    ],
+    "strategy_funnel": true,
+    "threshold_sweep": true,
+    "threshold_sweep_strategies": [
+      "pullback_v1",
+      "mean_reversion_v1",
+      "vwap_reversion_v1",
+      "htf_continuation_v1"
+    ]
+  },
+  "context": {
+    "enabled": true,
+    "refresh_seconds": 60.0,
+    "synthetic_dollar_index": true,
+    "groups": {
+      "usd_index": [
+        "DXY",
+        "USDX",
+        "DX"
+      ],
+      "us_stocks": [
+        "US500",
+        "SPX500",
+        "USA500",
+        "SP500"
+      ],
+      "us_tech": [
+        "USTEC",
+        "NAS100",
+        "US100"
+      ],
+      "volatility": [
+        "VIX",
+        "VIXX",
+        "VOLX"
+      ],
+      "us_yields": [
+        "US10Y",
+        "UST10Y",
+        "TNOTE",
+        "US10YR"
+      ],
+      "oil": [
+        "USOIL",
+        "WTI",
+        "XTIUSD"
+      ]
+    }
+  },
+  "ml_filter": {
+    "enabled": true,
+    "mode": "auto",
+    "strategies": [
+      "micro_scalper"
+    ],
+    "min_samples": 500,
+    "lookback_days": 120,
+    "min_uplift_r": 0.05,
+    "min_accepted_test": 30,
+    "max_model_age_days": 7.0
+  },
+  "alerts": {
+    "enabled": true,
+    "min_seconds_between_same_alert": 300,
+    "daily_summary_hour_utc": 21,
+    "channel": "discord",
+    "trade_alerts": {
+      "enabled": true,
+      "on_open": true,
+      "on_close": true,
+      "min_abs_r": 0.0
+    }
+  }
+}

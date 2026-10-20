@@ -1,0 +1,73 @@
+{
+  "name": "Quantara Trading Engine",
+  "short_name": "Quantara",
+  "description": "Live view of the Quantara trading system: open positions, today's trades, risk state and research findings.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#030F25",
+  "theme_color": "#030F25",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Live",
+      "short_name": "Live",
+      "description": "What is open right now",
+      "url": "/realtime",
+      "icons": [
+        {
+          "src": "/static/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Analysis",
+      "short_name": "Analysis",
+      "description": "Results by session and hour",
+      "url": "/analysis",
+      "icons": [
+        {
+          "src": "/static/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "History",
+      "short_name": "History",
+      "description": "Everything recorded",
+      "url": "/logs",
+      "icons": [
+        {
+          "src": "/static/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

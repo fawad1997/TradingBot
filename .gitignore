@@ -1,0 +1,38 @@
+# ---- Secrets: NEVER commit these. Only .env.example (placeholders) is shared. ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# ---- Generated at run time (logs, history, results, trained models) ----
+logs/*
+!logs/.gitkeep
+research/datasets/*
+!research/datasets/.gitkeep
+research/reports/*
+!research/reports/.gitkeep
+research/results/
+research/lab_data/
+research/experiments/*
+!research/experiments/.gitkeep
+*.pkl
+*.joblib
+*.log
+
+# ---- Local exports and editor/OS files ----
+database/data-*.csv
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db

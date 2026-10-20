@@ -1,0 +1,936 @@
+{
+  "_comment": "Strategy registry. Every parameter has min/max/step and an economic hypothesis. Status ladder: RESEARCH_ONLY -> SHADOW -> DEMO -> MICRO_LIVE -> VALIDATED. Change status only with `python -m app.main promote` (it records the evidence and your reason).",
+  "strategies": [
+    {
+      "id": "pullback_v1",
+      "class_name": "PullbackV1",
+      "version": "1.0.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [
+        "TREND_UP",
+        "TREND_DOWN"
+      ],
+      "allowed_sessions": [],
+      "params": {
+        "h1_ema_fast": {
+          "value": 50,
+          "minimum": 20,
+          "maximum": 100,
+          "step": 10,
+          "hypothesis": "Medium-term trend reference on H1"
+        },
+        "h1_ema_slow": {
+          "value": 200,
+          "minimum": 100,
+          "maximum": 300,
+          "step": 50,
+          "hypothesis": "Long-term trend filter on H1"
+        },
+        "h1_adx_min": {
+          "value": 15,
+          "minimum": 15,
+          "maximum": 30,
+          "step": 2.5,
+          "hypothesis": "Pullbacks only continue when H1 directional strength exists"
+        },
+        "h1_slope_len": {
+          "value": 10,
+          "minimum": 5,
+          "maximum": 20,
+          "step": 5,
+          "hypothesis": "Bars used to measure H1 EMA slope"
+        },
+        "h1_slope_min": {
+          "value": 0.02,
+          "minimum": 0.0,
+          "maximum": 0.1,
+          "step": 0.01,
+          "hypothesis": "Minimum ATR-normalised EMA slope per bar"
+        },
+        "m15_ema": {
+          "value": 20,
+          "minimum": 10,
+          "maximum": 34,
+          "step": 2,
+          "hypothesis": "Short-term mean the pullback returns to"
+        },
+        "atr_len": {
+          "value": 14,
+          "minimum": 10,
+          "maximum": 21,
+          "step": 1,
+          "hypothesis": "Volatility unit"
+        },
+        "rsi_len": {
+          "value": 14,
+          "minimum": 7,
+          "maximum": 21,
+          "step": 7,
+          "hypothesis": "Momentum recovery measure"
+        },
+        "rsi_reclaim": {
+          "value": 50,
+          "minimum": 45,
+          "maximum": 60,
+          "step": 5,
+          "hypothesis": "Momentum must re-cross neutral in the trend direction"
+        },
+        "impulse_lookback": {
+          "value": 40,
+          "minimum": 20,
+          "maximum": 80,
+          "step": 10,
+          "hypothesis": "M15 bars searched for the last impulse leg"
+        },
+        "impulse_min_atr": {
+          "value": 1.0,
+          "minimum": 1.0,
+          "maximum": 4.0,
+          "step": 0.5,
+          "hypothesis": "Impulse must be meaningful relative to volatility"
+        },
+        "pullback_min_depth": {
+          "value": 0.236,
+          "minimum": 0.1,
+          "maximum": 0.4,
+          "step": 0.05,
+          "hypothesis": "H2: shallow vs deep pullbacks"
+        },
+        "pullback_max_depth": {
+          "value": 0.618,
+          "minimum": 0.4,
+          "maximum": 0.8,
+          "step": 0.05,
+          "hypothesis": "Deeper retracement suggests trend failure"
+        },
+        "pullback_max_bars": {
+          "value": 8,
+          "minimum": 4,
+          "maximum": 32,
+          "step": 4,
+          "hypothesis": "Pullback that lasts too long is no longer a pullback"
+        },
+        "ema_touch_atr": {
+          "value": 0.5,
+          "minimum": 0.0,
+          "maximum": 1.5,
+          "step": 0.25,
+          "hypothesis": "Pullback must reach the M15 mean area"
+        },
+        "sl_buffer_atr": {
+          "value": 0.25,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "step": 0.05,
+          "hypothesis": "Stop sits beyond the pullback extreme by a volatility buffer"
+        },
+        "min_stop_atr": {
+          "value": 0.5,
+          "minimum": 0.25,
+          "maximum": 1.5,
+          "step": 0.25,
+          "hypothesis": "Stops tighter than this are noise"
+        },
+        "max_stop_atr": {
+          "value": 3.0,
+          "minimum": 1.5,
+          "maximum": 5.0,
+          "step": 0.5,
+          "hypothesis": "Stops wider than this mean the setup is not clean"
+        },
+        "setup_cooldown_bars": {
+          "value": 8,
+          "minimum": 1,
+          "maximum": 32,
+          "step": 1,
+          "hypothesis": "A stale setup cannot be regenerated"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 900,
+          "step": 60,
+          "hypothesis": "Signal half-life on M15"
+        },
+        "h1_adx_relative": {
+          "value": 0.0,
+          "minimum": 0.0,
+          "maximum": 3.0,
+          "description": "0 = use the fixed h1_adx_min. >0 = require ADX at least this multiple of its own rolling mean; the fixed value stays the floor, h1_adx_relative_max the ceiling."
+        },
+        "h1_adx_relative_max": {
+          "value": 40.0,
+          "minimum": 20.0,
+          "maximum": 60.0,
+          "description": "upper bound for the adaptive ADX minimum"
+        },
+        "rsi_reclaim_adaptive": {
+          "value": false,
+          "minimum": null,
+          "maximum": null,
+          "description": "false = use the fixed rsi_reclaim 50. true = use RSI's own rolling median, bounded 40-60."
+        },
+        "adaptive_lookback": {
+          "value": 500,
+          "minimum": 100,
+          "maximum": 2000,
+          "description": "bars behind the current one used for adaptive levels"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "target_r": 1.0,
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        },
+        "partial": {
+          "enabled": false,
+          "at_r": 1.0,
+          "fraction": 0.5,
+          "move_sl_to_be": true
+        },
+        "trail": {
+          "activate_r": 1.0,
+          "atr_mult": 2.5,
+          "pivot_n": 3,
+          "buffer_atr": 0.2
+        },
+        "time_stop": {
+          "enabled": true,
+          "max_bars": 16,
+          "min_r": 0.25
+        },
+        "thesis_invalidation": true
+      },
+      "research_grid": {
+        "h1_adx_min": [
+          17.5,
+          20,
+          22.5
+        ],
+        "pullback_max_depth": [
+          0.5,
+          0.618,
+          0.7
+        ],
+        "sl_buffer_atr": [
+          0.15,
+          0.25,
+          0.35
+        ]
+      },
+      "stats": {},
+      "risk_multiplier": 1.0
+    },
+    {
+      "id": "mean_reversion_v1",
+      "class_name": "MeanReversionV1",
+      "version": "1.0.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [
+        "RANGE"
+      ],
+      "allowed_sessions": [],
+      "params": {
+        "h1_adx_max": {
+          "value": 18,
+          "minimum": 12,
+          "maximum": 25,
+          "step": 1,
+          "hypothesis": "Mean reversion needs weak directional pressure"
+        },
+        "bb_len": {
+          "value": 20,
+          "minimum": 10,
+          "maximum": 40,
+          "step": 5,
+          "hypothesis": "Range mean"
+        },
+        "bb_k": {
+          "value": 2.0,
+          "minimum": 1.5,
+          "maximum": 3.0,
+          "step": 0.25,
+          "hypothesis": "Range extreme"
+        },
+        "rsi_len": {
+          "value": 14,
+          "minimum": 7,
+          "maximum": 21,
+          "step": 7,
+          "hypothesis": "Exhaustion measure"
+        },
+        "rsi_extreme": {
+          "value": 30,
+          "minimum": 20,
+          "maximum": 35,
+          "step": 5,
+          "hypothesis": "Oversold/overbought threshold (mirrored for sells)"
+        },
+        "atr_len": {
+          "value": 14,
+          "minimum": 10,
+          "maximum": 21,
+          "step": 1,
+          "hypothesis": "Volatility unit"
+        },
+        "sl_buffer_atr": {
+          "value": 0.3,
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "step": 0.1,
+          "hypothesis": "Stop beyond the re-entry extreme"
+        },
+        "min_reward_r": {
+          "value": 1.0,
+          "minimum": 0.5,
+          "maximum": 2.0,
+          "step": 0.25,
+          "hypothesis": "Target (band mid) must pay at least this many R"
+        },
+        "setup_cooldown_bars": {
+          "value": 8,
+          "minimum": 1,
+          "maximum": 32,
+          "step": 1,
+          "hypothesis": "No repeated signals from one excursion"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 900,
+          "step": 60,
+          "hypothesis": "Signal half-life"
+        },
+        "h1_adx_relative": {
+          "value": 0.0,
+          "minimum": 0.0,
+          "maximum": 3.0,
+          "description": "0 = use the fixed h1_adx_max. >0 = require ADX at most this multiple of its own rolling mean; the fixed value stays the ceiling, h1_adx_relative_min the floor."
+        },
+        "h1_adx_relative_min": {
+          "value": 8.0,
+          "minimum": 4.0,
+          "maximum": 20.0,
+          "description": "lower bound for the adaptive ADX ceiling"
+        },
+        "rsi_extreme_sigma": {
+          "value": 0.0,
+          "minimum": 0.0,
+          "maximum": 3.0,
+          "description": "0 = use the fixed rsi_extreme 30. >0 = this many standard deviations below RSI's own rolling median, bounded 15-45."
+        },
+        "adaptive_lookback": {
+          "value": 500,
+          "minimum": 100,
+          "maximum": 2000,
+          "description": "bars behind the current one used for adaptive levels"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "target_r": null,
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        },
+        "partial": {
+          "enabled": false,
+          "at_r": 1.0,
+          "fraction": 0.5,
+          "move_sl_to_be": true
+        },
+        "trail": {
+          "activate_r": 1.0,
+          "atr_mult": 2.0,
+          "pivot_n": 3,
+          "buffer_atr": 0.2
+        },
+        "time_stop": {
+          "enabled": true,
+          "max_bars": 24,
+          "min_r": 0.0
+        },
+        "thesis_invalidation": false
+      },
+      "research_grid": {
+        "bb_k": [
+          1.75,
+          2.0,
+          2.25
+        ],
+        "rsi_extreme": [
+          25,
+          30,
+          35
+        ]
+      },
+      "stats": {},
+      "risk_multiplier": 1.0
+    },
+    {
+      "id": "micro_scalper",
+      "class_name": "MicroScalper",
+      "version": "1.7.0",
+      "enabled": false,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [],
+      "allowed_sessions": [],
+      "params": {
+        "macro_filter_enabled": {
+          "value": true,
+          "hypothesis": "Require H4 trend alignment and price at a channel extreme"
+        },
+        "macro_channel_window": {
+          "value": 40,
+          "minimum": 20,
+          "maximum": 80,
+          "step": 5,
+          "hypothesis": "Use a causal 40-bar H4 linear-regression residual channel"
+        },
+        "macro_extreme_fraction": {
+          "value": 0.3,
+          "minimum": 0.1,
+          "maximum": 0.3,
+          "step": 0.05,
+          "hypothesis": "Allow candidates in the outer 30% of the aligned H4 channel for Gemini review"
+        },
+        "volume_lookback": {
+          "value": 20,
+          "minimum": 10,
+          "maximum": 40,
+          "step": 5,
+          "hypothesis": "Compare closed-candle tick volume with the prior median"
+        },
+        "minimum_relative_volume": {
+          "value": 1.0,
+          "minimum": 0.5,
+          "maximum": 3.0,
+          "step": 0.1,
+          "hypothesis": "Require tick volume at least equal to the prior 20-bar median before Gemini review"
+        },
+        "candlestick_triggers_enabled": {
+          "value": true,
+          "hypothesis": "Closed M1 pin bars and engulfing candles require M15 directional confirmation"
+        },
+        "stop_atr_multiple": {
+          "value": 1.5,
+          "minimum": 0.5,
+          "maximum": 3.0,
+          "step": 0.1,
+          "hypothesis": "Scale stop distance to the latest closed M1 ATR(14)"
+        },
+        "target_atr_multiple": {
+          "value": 1.5,
+          "minimum": 0.5,
+          "maximum": 3.0,
+          "step": 0.1,
+          "hypothesis": "Scale take-profit distance to the latest closed M1 ATR(14)"
+        },
+        "signal_ttl_sec": {
+          "value": 60,
+          "minimum": 10,
+          "maximum": 300,
+          "step": 10,
+          "hypothesis": "fast expiration"
+        },
+        "setup_cooldown_bars": {
+          "value": 0,
+          "minimum": 0,
+          "maximum": 10,
+          "step": 1,
+          "hypothesis": "trade instantly"
+        },
+        "min_stop_spread_multiple": {
+          "value": 10.0,
+          "minimum": 3.0,
+          "maximum": 50.0,
+          "step": 1.0,
+          "hypothesis": "Stop at least N x the live spread; a random walk costs about (spread/stop) R per trade"
+        },
+        "min_reward_risk": {
+          "value": 1.0,
+          "minimum": 0.5,
+          "maximum": 5.0,
+          "step": 0.25,
+          "hypothesis": "Take-profit as a multiple of the final stop distance"
+        },
+        "trigger_timeframe": {
+          "value": "M1",
+          "hypothesis": "Candle timeframe for the trigger: M1 (confirm M15), M15 (confirm H1) or H1 (confirm H4). Slower = wider stop = spread is a smaller share of it. Compare in the research lab before switching."
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        }
+      },
+      "research_grid": {
+        "candlestick_triggers_enabled": [
+          true,
+          false
+        ]
+      },
+      "stats": {},
+      "risk_multiplier": 0.5,
+      "disabled_reason": "Disabled 19 Oct 2026 on the evidence: 198 live trades at -0.472R (32% won) and 2,642 shadow signals at -1.023R (24% won). ~2,840 observations. The book without it is +8.22R. The strategy-health monitor had already been restricting it."
+    },
+    {
+      "id": "breakout_retest_v1",
+      "class_name": "BreakoutRetest",
+      "version": "0.1.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [],
+      "allowed_sessions": [],
+      "params": {
+        "lookback": {
+          "value": 40,
+          "minimum": 15,
+          "maximum": 120,
+          "step": 5,
+          "hypothesis": "Range length whose break counts as a breakout"
+        },
+        "wait": {
+          "value": 12,
+          "minimum": 2,
+          "maximum": 40,
+          "step": 1,
+          "hypothesis": "Bars allowed for the retest before the break is abandoned"
+        },
+        "tol_atr": {
+          "value": 0.25,
+          "minimum": 0.05,
+          "maximum": 1.5,
+          "step": 0.05,
+          "hypothesis": "How close the retest must come to the broken level, in ATR"
+        },
+        "min_break_atr": {
+          "value": 0.1,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "step": 0.05,
+          "hypothesis": "Minimum push beyond the range for a break to count"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 1800,
+          "step": 60,
+          "hypothesis": "M15 setups stay valid longer than an M1 scalp"
+        },
+        "setup_cooldown_bars": {
+          "value": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "step": 1,
+          "hypothesis": "One entry per setup; a repeat of the same bar is a duplicate"
+        },
+        "stop_atr": {
+          "value": 2.0,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Stop as a multiple of M15 ATR(14); the research grid sweeps this"
+        },
+        "reward_risk": {
+          "value": 1.5,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Target as a multiple of the final stop distance"
+        },
+        "min_stop_spread_multiple": {
+          "value": 10.0,
+          "minimum": 3.0,
+          "maximum": 50.0,
+          "step": 1.0,
+          "hypothesis": "Never risk a stop closer than N spreads: cost is about (spread/stop) R"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        }
+      },
+      "research_grid": {},
+      "stats": {},
+      "risk_multiplier": 0.5
+    },
+    {
+      "id": "momentum_trend_v1",
+      "class_name": "MomentumTrend",
+      "version": "0.1.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [],
+      "allowed_sessions": [],
+      "params": {
+        "fast": {
+          "value": 20,
+          "minimum": 5,
+          "maximum": 60,
+          "step": 1,
+          "hypothesis": "Fast EMA defining the trend"
+        },
+        "slow": {
+          "value": 50,
+          "minimum": 20,
+          "maximum": 200,
+          "step": 5,
+          "hypothesis": "Slow EMA defining the trend"
+        },
+        "mom_bars": {
+          "value": 20,
+          "minimum": 5,
+          "maximum": 100,
+          "step": 5,
+          "hypothesis": "Window for the volatility-adjusted momentum test"
+        },
+        "min_mom_atr": {
+          "value": 1.0,
+          "minimum": 0.1,
+          "maximum": 5.0,
+          "step": 0.1,
+          "hypothesis": "Momentum required over that window, in ATR"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 1800,
+          "step": 60,
+          "hypothesis": "M15 setups stay valid longer than an M1 scalp"
+        },
+        "setup_cooldown_bars": {
+          "value": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "step": 1,
+          "hypothesis": "One entry per setup; a repeat of the same bar is a duplicate"
+        },
+        "stop_atr": {
+          "value": 2.0,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Stop as a multiple of M15 ATR(14); the research grid sweeps this"
+        },
+        "reward_risk": {
+          "value": 1.5,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Target as a multiple of the final stop distance"
+        },
+        "min_stop_spread_multiple": {
+          "value": 10.0,
+          "minimum": 3.0,
+          "maximum": 50.0,
+          "step": 1.0,
+          "hypothesis": "Never risk a stop closer than N spreads: cost is about (spread/stop) R"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        }
+      },
+      "research_grid": {},
+      "stats": {},
+      "risk_multiplier": 0.5
+    },
+    {
+      "id": "session_breakout_v1",
+      "class_name": "SessionBreakout",
+      "version": "0.1.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [],
+      "allowed_sessions": [],
+      "params": {
+        "range_from": {
+          "value": 0.0,
+          "minimum": 0.0,
+          "maximum": 23.0,
+          "step": 0.5,
+          "hypothesis": "UTC hour the reference range starts"
+        },
+        "range_to": {
+          "value": 7.0,
+          "minimum": 1.0,
+          "maximum": 24.0,
+          "step": 0.5,
+          "hypothesis": "UTC hour the reference range ends"
+        },
+        "trade_from": {
+          "value": 7.0,
+          "minimum": 0.0,
+          "maximum": 23.0,
+          "step": 0.5,
+          "hypothesis": "UTC hour breakouts may be taken from"
+        },
+        "trade_to": {
+          "value": 13.0,
+          "minimum": 1.0,
+          "maximum": 24.0,
+          "step": 0.5,
+          "hypothesis": "UTC hour breakouts stop being taken"
+        },
+        "min_range_atr": {
+          "value": 0.5,
+          "minimum": 0.0,
+          "maximum": 5.0,
+          "step": 0.1,
+          "hypothesis": "Ignore a reference range narrower than this, in ATR"
+        },
+        "buffer_atr": {
+          "value": 0.1,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "step": 0.05,
+          "hypothesis": "Push beyond the range needed to call it a break"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 1800,
+          "step": 60,
+          "hypothesis": "M15 setups stay valid longer than an M1 scalp"
+        },
+        "setup_cooldown_bars": {
+          "value": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "step": 1,
+          "hypothesis": "One entry per setup; a repeat of the same bar is a duplicate"
+        },
+        "stop_atr": {
+          "value": 2.0,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Stop as a multiple of M15 ATR(14); the research grid sweeps this"
+        },
+        "reward_risk": {
+          "value": 1.5,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Target as a multiple of the final stop distance"
+        },
+        "min_stop_spread_multiple": {
+          "value": 10.0,
+          "minimum": 3.0,
+          "maximum": 50.0,
+          "step": 1.0,
+          "hypothesis": "Never risk a stop closer than N spreads: cost is about (spread/stop) R"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        }
+      },
+      "research_grid": {},
+      "stats": {},
+      "risk_multiplier": 0.5
+    },
+    {
+      "id": "vwap_reversion_v1",
+      "class_name": "VwapReversion",
+      "version": "0.1.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [],
+      "allowed_sessions": [],
+      "params": {
+        "min_dev_atr": {
+          "value": 2.0,
+          "minimum": 0.5,
+          "maximum": 6.0,
+          "step": 0.25,
+          "hypothesis": "Distance from session VWAP before a fade is considered, in ATR"
+        },
+        "warmup_bars": {
+          "value": 20,
+          "minimum": 2,
+          "maximum": 100,
+          "step": 1,
+          "hypothesis": "Bars of session VWAP needed before it is trusted"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 1800,
+          "step": 60,
+          "hypothesis": "M15 setups stay valid longer than an M1 scalp"
+        },
+        "setup_cooldown_bars": {
+          "value": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "step": 1,
+          "hypothesis": "One entry per setup; a repeat of the same bar is a duplicate"
+        },
+        "stop_atr": {
+          "value": 2.0,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Stop as a multiple of M15 ATR(14); the research grid sweeps this"
+        },
+        "reward_risk": {
+          "value": 1.5,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Target as a multiple of the final stop distance"
+        },
+        "min_stop_spread_multiple": {
+          "value": 10.0,
+          "minimum": 3.0,
+          "maximum": 50.0,
+          "step": 1.0,
+          "hypothesis": "Never risk a stop closer than N spreads: cost is about (spread/stop) R"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        }
+      },
+      "research_grid": {},
+      "stats": {},
+      "risk_multiplier": 0.5
+    },
+    {
+      "id": "htf_continuation_v1",
+      "class_name": "HtfContinuation",
+      "version": "0.1.0",
+      "enabled": true,
+      "status": "DEMO",
+      "symbols": [
+        "*"
+      ],
+      "allowed_regimes": [],
+      "allowed_sessions": [],
+      "params": {
+        "htf_ema": {
+          "value": 20,
+          "minimum": 5,
+          "maximum": 100,
+          "step": 1,
+          "hypothesis": "H1 EMA setting the direction"
+        },
+        "htf_slope_bars": {
+          "value": 3,
+          "minimum": 1,
+          "maximum": 20,
+          "step": 1,
+          "hypothesis": "Bars over which the H1 EMA slope is measured"
+        },
+        "ema": {
+          "value": 20,
+          "minimum": 5,
+          "maximum": 100,
+          "step": 1,
+          "hypothesis": "M15 EMA the pullback must reach"
+        },
+        "min_slope_atr": {
+          "value": 0.2,
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "step": 0.05,
+          "hypothesis": "H1 slope required, in H1 ATR"
+        },
+        "signal_ttl_sec": {
+          "value": 600,
+          "minimum": 60,
+          "maximum": 1800,
+          "step": 60,
+          "hypothesis": "M15 setups stay valid longer than an M1 scalp"
+        },
+        "setup_cooldown_bars": {
+          "value": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "step": 1,
+          "hypothesis": "One entry per setup; a repeat of the same bar is a duplicate"
+        },
+        "stop_atr": {
+          "value": 2.0,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Stop as a multiple of M15 ATR(14); the research grid sweeps this"
+        },
+        "reward_risk": {
+          "value": 1.5,
+          "minimum": 0.75,
+          "maximum": 4.0,
+          "step": 0.25,
+          "hypothesis": "Target as a multiple of the final stop distance"
+        },
+        "min_stop_spread_multiple": {
+          "value": 10.0,
+          "minimum": 3.0,
+          "maximum": 50.0,
+          "step": 1.0,
+          "hypothesis": "Never risk a stop closer than N spreads: cost is about (spread/stop) R"
+        }
+      },
+      "exit_model": {
+        "type": "fixed",
+        "breakeven": {
+          "enabled": true,
+          "activate_r": 0.5,
+          "cover_spread": true
+        }
+      },
+      "research_grid": {},
+      "stats": {},
+      "risk_multiplier": 0.5
+    }
+  ]
+}
