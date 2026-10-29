@@ -17,6 +17,22 @@ class TestLiveProtection(unittest.TestCase):
         data = json.loads(path.read_text(encoding="utf-8"))
         for strategy in data["strategies"]:
             exit_model = strategy["exit_model"]
+            if strategy["id"] in ("trend_daily_v1", "trend_ensemble_v1"):
+                # The deliberate exception: daily trend following trails a 3 x daily-ATR chandelier and must not
+                # bank early - in its decade replay the account's lock cut gold from +0.35R to +0.07R a trade.
+                self.assertEqual(exit_model["type"], "chandelier")
+                self.assertFalse(exit_model["breakeven"]["enabled"])
+                self.assertFalse(exit_model["profit_lock"]["enabled"])
+                self.assertGreater(exit_model["target_r"], 0, "the broker requires a take-profit")
+                continue
+            if strategy["id"] == "turn_of_month_v1":
+                # A calendar trade: it ends on the time stop after four trading days, not on the path
+                self.assertEqual(exit_model["type"], "fixed")
+                self.assertTrue(exit_model["time_stop"]["enabled"])
+                self.assertFalse(exit_model["breakeven"]["enabled"])
+                self.assertFalse(exit_model["profit_lock"]["enabled"])
+                self.assertGreater(exit_model["target_r"], 0, "the broker requires a take-profit")
+                continue
             self.assertEqual(exit_model["type"], "fixed")
             self.assertTrue(exit_model["breakeven"]["enabled"])
             self.assertEqual(exit_model["breakeven"]["activate_r"], 0.5)

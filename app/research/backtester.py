@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from app.alpha.exits import SimulatedTrade
+from app.alpha.exits import SimulatedTrade, with_execution_exits
 from app.config import SessionsCfg, StrategyCfg
 from app.core.types import EventState, Side, SymbolSpec
 from app.features.frame import FeatureFrame, resample
@@ -57,6 +57,10 @@ class BTSettings:
     grid_max_margin_fraction: float = 0.5
     start_time: Optional[int] = None   # only take signals in [start_time, end_time)
     end_time: Optional[int] = None
+    # The account-wide exit rules the live trade manager adds to every trade (breakeven + profit lock), as the
+    # ExecutionCfg fields (or a dict of them). None = the strategy's own exit model only, which is what every
+    # backtest measured before October 2026; the research lab passes the live config so it judges what trades.
+    execution_exits: Optional[object] = None
 
 
 @dataclass
@@ -89,12 +93,28 @@ def regime_series(h1: FeatureFrame) -> List[tuple]:
 
 def _nights(t0: int, t1: int) -> int:
     """Number of 21:00 UTC rollovers crossed (Wednesday counts triple)."""
-    n, d = 0, (t0 // 86400) * 86400 + 21 * 3600
+    return rollover_nights(t0, t1, 2)
+
+
+def triple_weekday(spec) -> int:
+    """Python weekday (Monday = 0) on which the symbol charges three nights. MT5's swap_rollover3days counts from
+    Sunday = 0; anything outside 0-6 falls back to Wednesday, the forex convention."""
+    try:
+        v = int((getattr(spec, "raw", None) or {}).get("swap_rollover3days"))
+    except (TypeError, ValueError):
+        return 2
+    return (v - 1) % 7 if 0 <= v <= 6 else 2
+
+
+def rollover_nights(t0: int, t1: int, triple: int = 2) -> int:
+    """Swap nights charged between t0 and t1: one per 21:00 UTC weekday rollover, three on the `triple` weekday
+    (it pays for the weekend), none on Saturday or Sunday - seven a week, whichever day carries the weekend."""
+    n, d = 0, (int(t0) // 86400) * 86400 + 21 * 3600
     if d <= t0:
         d += 86400
     while d <= t1:
         wd = datetime.fromtimestamp(d, tz=timezone.utc).weekday()
-        n += 3 if wd == 2 else (0 if wd in (5, 6) else 1)
+        n += 3 if wd == triple else (0 if wd in (5, 6) else 1)
         d += 86400
     return n
 
@@ -119,7 +139,11 @@ def run_backtest(scfg: StrategyCfg, m15: FeatureFrame, h1: FeatureFrame, setting
             raise ValueError("Grid basket target must be positive")
         if settings.grid_leverage <= 0 or not 0 < settings.grid_max_margin_fraction <= 0.5:
             raise ValueError("Grid leverage must be positive and margin fraction must be in (0, 0.5]")
-    model = strat.exit_model
+    def traded_model(plan) -> dict:
+        # The plan's OWN exit model, as live trades carry it: a strategy may set per-trade values there (the trend
+        # strategy's trail distance). Using the strategy's static model instead gave every trend trade an M15 trail.
+        own = plan.exit_model or strat.exit_model
+        return with_execution_exits(own, settings.execution_exits) if settings.execution_exits is not None else own
     sess = SessionClassifier(sessions_cfg or SessionsCfg())
     point = spec.point
     regimes = regimes if regimes is not None else regime_series(h1)
@@ -386,7 +410,8 @@ def run_backtest(scfg: StrategyCfg, m15: FeatureFrame, h1: FeatureFrame, setting
         if not feasible:
             infeasible += 1
             vol_lots = 0.0
-        open_tr = SimulatedTrade(plan.direction, entry, plan.sl, plan.tp, model, int(m15.t[j]), slip, slip + sp1)
+        open_tr = SimulatedTrade(plan.direction, entry, plan.sl, plan.tp, traded_model(plan), int(m15.t[j]), slip,
+                                 slip + sp1)
         open_meta = {"strategy_id": scfg.id, "side": plan.direction, "signal_time": t_sig + 900,
                      "entry_time": int(m15.t[j]), "entry": entry, "sl": plan.sl, "tp": plan.tp, "stop": stop,
                      "session": session, "regime": label, "volatility": vol, "event_state": str(ev_state),

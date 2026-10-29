@@ -26,7 +26,8 @@ class TestUninstalledStrategiesAreAnnounced(unittest.TestCase):
         """The exact situation that hid five working strategies behind a kept config/ directory."""
         three = [s for s in ConfigManager().strategies.strategies if s.id in ORIGINALS]
         self.assertEqual(uninstalled_classes(three),
-                         ["BreakoutRetest", "HtfContinuation", "MomentumTrend", "SessionBreakout", "VwapReversion"])
+                         ["BreakoutRetest", "HtfContinuation", "MomentumTrend", "SessionBreakout", "TrendDaily",
+                          "TrendEnsemble", "TurnOfMonth", "VwapReversion"])
 
     def test_it_reports_class_names_that_exist_in_code(self):
         for name in uninstalled_classes([]):

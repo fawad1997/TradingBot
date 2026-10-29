@@ -157,14 +157,18 @@ def run_deep_research(cfgm, repo, adapter=None, now: Optional[datetime] = None,
 def _save(repo, payload: Dict[str, Any]) -> None:
     if repo is None:
         return
+    # The table's own columns. This wrote "kind" and "results", which research_lab_runs does not have, and no
+    # symbol (NOT NULL), so every idle run was refused - and the refusal was logged at DEBUG, so nobody saw it.
     try:
         repo.insert("research_lab_runs", {
             "created_at": datetime.now(timezone.utc),
-            "kind": "IDLE_DEEP_RESEARCH",
-            "results": payload,
+            "symbol": "*",                        # an idle run covers every symbol
+            "verdict": "IDLE_DEEP_RESEARCH",
+            "best": payload,
+            "note": "idle deep research: " + ", ".join(sorted((payload.get("results") or {}).keys())),
         })
     except Exception:
-        log.debug("could not record idle research run", exc_info=True)
+        log.warning("could not record idle research run", exc_info=True)
 
 
 # --------------------------------------------------------------------------------------- jobs

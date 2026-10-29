@@ -7,10 +7,23 @@ exit_model = {
   "type": "fixed" | "structure_trail" | "atr_trail" | "chandelier",   # Exit A / B / C / D
   "target_r": 2.0 | null,                                             # fixed target (null = none)
   "partial": {"enabled", "at_r", "fraction", "move_sl_to_be"},        # Exit E
-  "trail": {"activate_r", "atr_mult", "pivot_n", "buffer_atr"},
+  "trail": {"activate_r", "atr_mult", "pivot_n", "buffer_atr",
+            "distance_price"},                                         # distance_price: fixed, set at entry
   "time_stop": {"enabled", "max_bars", "min_r"},                      # Exit F
-  "thesis_invalidation": bool                                          # Exit G
+  "thesis_invalidation": bool,                                         # Exit G
+  "breakeven": {"enabled", "activate_r", "cover_spread"},
+  "profit_lock": {"enabled", "small_win_activation_r", ...}           # see with_execution_exits
 }
+
+THE PROFIT LOCK IS PART OF THE EXIT, SO IT LIVES HERE TOO
+---------------------------------------------------------
+Until October 2026 the profit-lock ladder (lock 70% of the peak once a trade is 0.5R up) existed only inside
+TradeManager.on_tick. Every live trade went through it; the backtester, the counterfactual tracker and the
+research lab's simulator did not, so the research judged a different exit from the one that traded, and the
+selector pooled the two as one record. The ladder is now `profit_lock_target` below - unit-agnostic, so the
+trade manager feeds it money and the simulators feed it R - and `with_execution_exits` copies the configured
+levels into each plan's exit model, where a strategy can switch the lock off (trend following must: a lock that
+banks 70% of a 0.5R peak never lets a 5R trend happen).
 """
 from __future__ import annotations
 
@@ -115,15 +128,82 @@ def improves(st: OpenTradeState, candidate: float, min_step_r: float = 0.0) -> b
     return candidate < st.sl - max(1e-9, step)
 
 
+def profit_lock_target(peak: float, small_activation: float, small_floor: float, ambition_activation: float,
+                       ambition_floor: float, giveback: float, previous_target: Optional[float] = None,
+                       was_active: bool = False, base_floor: float = 0.0) -> Tuple[bool, float]:
+    """The profit-lock ladder: (lock active?, profit that must be kept) for a trade whose best profit so far is
+    `peak`. Every argument is in ONE unit - money in the live trade manager, R in the simulators.
+
+      peak >= ambition_activation   keep max(ambition_floor, peak x (1 - giveback))
+      peak >= small_activation      keep max(small_floor,    peak x (1 - giveback))
+      below both                    nothing new; an already-active lock keeps its target
+
+    With giveback 0 the legacy fixed rungs apply. The target never falls below `previous_target`, so the floor
+    can only rise. The cost floor (never lock less than the round trip costs) is the caller's, because only the
+    caller knows the trade's costs in its own unit."""
+    if ambition_activation > 0 and peak >= ambition_activation:
+        target = (max(ambition_floor, peak * (1.0 - giveback)) if giveback > 0
+                  else max(ambition_floor, peak - (ambition_activation - ambition_floor)))
+        active = True
+    elif small_activation > 0 and peak >= small_activation:
+        target = max(small_floor, peak * (1.0 - giveback)) if giveback > 0 else small_floor
+        active = True
+    else:
+        target, active = base_floor, was_active
+    return active, max(target, previous_target or 0.0)
+
+
+#: Breakeven as the live trade manager applies it when a strategy's exit model does not say otherwise.
+DEFAULT_BREAKEVEN = {"enabled": True, "activate_r": 0.5, "cover_spread": True}
+
+
+def with_execution_exits(model: Optional[dict], execution) -> dict:
+    """The exit model as it is actually TRADED: the strategy's own model plus the account-wide breakeven and
+    profit-lock rules the trade manager applies to every position.
+
+    `execution` is the ExecutionCfg (or a dict of its fields). The lock levels are copied in R; the money levels
+    are left to the live manager, which takes the larger of the two, so at any account where 0.5R exceeds $0.20
+    (any risk above $0.40) the R levels are the ones that bind. A model that already says
+    `profit_lock: {"enabled": false}` keeps the lock off."""
+    out = dict(model or {})
+    out.setdefault("breakeven", dict(DEFAULT_BREAKEVEN))
+    get = (execution.get if isinstance(execution, dict) else lambda k, d=None: getattr(execution, k, d))
+    lock = dict(out.get("profit_lock") or {})
+    lock.setdefault("enabled", True)
+    for name, default in (("small_win_activation_r", 0.5), ("small_win_floor_r", 0.1),
+                          ("ambition_activation_r", 0.8), ("ambition_floor_r", 0.4)):
+        lock.setdefault(name, float(get(name, default) or 0.0))
+    lock.setdefault("giveback", float(get("profit_giveback_fraction", 0.0) or 0.0))
+    lock.setdefault("cost_multiple", float(get("profit_lock_cost_multiple", 1.5) or 1.5))
+    out["profit_lock"] = lock
+    return out
+
+
+def profit_lock_enabled(model: Optional[dict]) -> bool:
+    """True unless the exit model switches the lock off. A model without the key (every trade opened before the
+    lock moved here) keeps the behaviour it always had: locked."""
+    return bool(((model or {}).get("profit_lock") or {}).get("enabled", True))
+
+
 def trail_candidate(st: OpenTradeState, model: dict, ff: FeatureFrame, i: int) -> Optional[float]:
     typ = model.get("type", "fixed")
     tr = model.get("trail") or {}
     if typ == "fixed" or st.mfe_r < float(tr.get("activate_r", 1.0)):
         return None
+    s = st.side.sign
+    # A fixed distance chosen at entry (e.g. 3 x the DAILY ATR) instead of a multiple of this frame's ATR. The
+    # trade manager only ever passes the M15 frame, which would turn a daily trail into an intraday one.
+    dist = tr.get("distance_price")
+    if dist is not None and typ in ("atr_trail", "chandelier"):
+        d = float(dist)
+        if not np.isfinite(d) or d <= 0:
+            return None
+        if typ == "atr_trail":
+            return float(ff.c[i] - s * d)
+        return float(st.best_price - s * d)
     atr = ff.atr(14)[i]
     if not np.isfinite(atr):
         return None
-    s = st.side.sign
     if typ == "atr_trail":
         return float(ff.c[i] - s * float(tr.get("atr_mult", 2.5)) * atr)
     if typ == "chandelier":
@@ -248,7 +328,15 @@ class SimResult:
 
 class SimulatedTrade:
     """One hypothetical trade stepped bar by bar. Shared by the backtester and
-    the counterfactual engine so both use identical fill and exit rules."""
+    the counterfactual engine so both use identical fill and exit rules.
+
+    Breakeven and the profit lock run here when the exit model carries them (`with_execution_exits` puts them
+    there). Live they act on every tick; on a bar the order inside is unknown, so both are applied causally:
+    the stop armed by EARLIER peaks is what this bar's low is tested against, then this bar's high raises the
+    peak, and because a bar's close comes after its high, a close beyond the newly armed level means the level
+    was crossed inside the bar - the trade exits there, as the tick-level manager would have. A bar that closed
+    against the trade is taken to have made its peak first (MT5's tester order), so its far extreme is tested
+    against the new level as well."""
 
     def __init__(self, side: Side, entry: float, sl: float, tp: Optional[float], model: dict, entry_time: int,
                  slip_price: float, be_cost_price: float, max_bars: Optional[int] = None):
@@ -258,6 +346,9 @@ class SimulatedTrade:
         self.be_cost = be_cost_price
         self.max_bars = max_bars
         self.result: Optional[SimResult] = None
+        self._lock_active = False
+        self._lock_target: Optional[float] = None
+        self._sl_source = ""                     # what last moved the stop: BREAKEVEN / PROFIT_LOCK / TRAIL
 
     def _finish(self, price: float, reason: str) -> SimResult:
         st = self.st
@@ -266,6 +357,30 @@ class SimulatedTrade:
         mfe = st.mfe_r
         self.result = SimResult(price, reason, r, mfe, st.mae_r, max(0.0, mfe - r), st.bars_held, st.partial_done)
         return self.result
+
+    def _managed_level(self, spread_price: float) -> Tuple[Optional[float], str]:
+        """The most protective stop that breakeven and the profit lock want after the peak seen so far."""
+        st = self.st
+        best, why = None, ""
+        be = self.model.get("breakeven") or {}
+        if be.get("enabled") and st.mfe_r >= float(be.get("activate_r", 0.5)):
+            offset = max(spread_price, self.be_cost) if be.get("cover_spread", True) else 0.0
+            best, why = breakeven_sl(st, offset), "BREAKEVEN"
+        lock = self.model.get("profit_lock") or {}
+        if lock.get("enabled") and st.risk > 0:
+            cost_r = self.slip / st.risk                    # what closing costs, as the live estimate counts it
+            active, target = profit_lock_target(
+                st.mfe_r - cost_r, float(lock.get("small_win_activation_r", 0.5)),
+                float(lock.get("small_win_floor_r", 0.1)), float(lock.get("ambition_activation_r", 0.8)),
+                float(lock.get("ambition_floor_r", 0.4)), float(lock.get("giveback", 0.0)),
+                self._lock_target, self._lock_active)
+            if active:
+                target = max(target, float(lock.get("cost_multiple", 1.5)) * cost_r)
+                self._lock_active, self._lock_target = True, target
+                level = st.entry + st.side.sign * (target + cost_r) * st.risk
+                if best is None or (level - best) * st.side.sign > 0:
+                    best, why = level, "PROFIT_LOCK"
+        return best, why
 
     def step(self, o: float, h: float, l: float, c: float, spread_price: float,
              ff: Optional[FeatureFrame] = None, i: Optional[int] = None, regime_trend: str = "",
@@ -278,15 +393,30 @@ class SimulatedTrade:
                 apply_partial(st, self.model, e.fraction, e.price, self.be_cost)
             else:
                 st.bars_held += 1
-                return self._finish(e.price, e.kind)
+                kind = e.kind
+                if kind in ("SL", "GAP_SL") and self._sl_source in ("BREAKEVEN", "PROFIT_LOCK"):
+                    kind = self._sl_source
+                return self._finish(e.price, kind)
         st.bars_held += 1
         exit_px = c if st.side is Side.BUY else c + spread_price
+        level, why = self._managed_level(spread_price)
+        if level is not None and improves(st, level):
+            # What traded AFTER this bar's peak: its close, and - on a bar that closed against the trade, which
+            # MT5's tester orders open-high-low-close for a buy (open-low-high-close for a sell) - its far
+            # extreme too. Testing only the close let a bar that peaked, fell through the new stop and closed back
+            # above it count as never stopped, though the live manager would have been (audit, 23 Oct 2026).
+            after_peak = exit_px
+            if (c - o) * st.side.sign < 0:
+                after_peak = l if st.side is Side.BUY else h + spread_price
+            if (after_peak - level) * st.side.sign <= 0:   # crossed after this bar's peak
+                return self._finish(level - st.side.sign * self.slip, why)
+            st.sl, self._sl_source = level, why
         if ff is not None and i is not None:
             dec = on_bar_close(st, self.model, ff, i, regime_trend, exit_px, min_stop)
             if dec.close_fraction >= 1.0:
                 return self._finish(exit_px - st.side.sign * self.slip, dec.reason)
             if dec.new_sl is not None:
-                st.sl = dec.new_sl
+                st.sl, self._sl_source = dec.new_sl, "TRAIL"
         if self.max_bars and st.bars_held >= self.max_bars:
             return self._finish(exit_px - st.side.sign * self.slip, "MAX_HOLD")
         return None

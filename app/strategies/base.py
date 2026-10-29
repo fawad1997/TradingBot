@@ -69,6 +69,12 @@ class Strategy(ABC):
     def lookbacks(self) -> Dict[str, int]:
         """Bars needed per timeframe, e.g. {"H1": 200, "M15": 60}."""
 
+    def min_history(self) -> Dict[str, int]:
+        """Bars without which the symbol must NOT start. Defaults to `lookbacks()`. A strategy that degrades to
+        INSUFFICIENT_HISTORY on its own can ask hydration for more (`lookbacks`) while requiring less here, so one
+        thin history (a newly listed CFD) cannot stop every other strategy on that symbol."""
+        return self.lookbacks()
+
     @abstractmethod
     def evaluate(self, v: StrategyView) -> EvalResult: ...
 

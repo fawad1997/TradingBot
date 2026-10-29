@@ -6,7 +6,7 @@ also hold a promotion status that permits the current environment.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from app.core.types import Eligibility, Environment, StrategyHealth, StrategyStatus
 from app.governance.health import strategy_health_key
@@ -32,7 +32,9 @@ class RouteResult:
 
 
 def route(strategies: List, regime: RegimeState, env: Environment,
-          health: Dict[str, StrategyHealth], shadow_enabled: bool) -> Dict[str, RouteResult]:
+          health: Dict[str, StrategyHealth], shadow_enabled: bool,
+          allocations: Optional[Dict] = None) -> Dict[str, RouteResult]:
+    """`allocations` ({strategy_id: Allocation}) comes from the selector in auto mode; None leaves routing as is."""
     out: Dict[str, RouteResult] = {}
     for s in strategies:
         sid = s.id
@@ -58,6 +60,17 @@ def route(strategies: List, regime: RegimeState, env: Environment,
             out[sid] = RouteResult(sid, Eligibility.RESTRICTED, "strategy health RESTRICTED", False, True)
             continue
         mult = float(getattr(s, "risk_multiplier", 1.0) or 1.0)
+        alloc = (allocations or {}).get(sid)
+        if alloc is not None:
+            if str(regime.trend) in alloc.vetoed_regimes:
+                out[sid] = RouteResult(sid, Eligibility.RESTRICTED,
+                                       f"selector: loses in regime {regime.trend}", False, True)
+                continue
+            if alloc.multiplier <= 0:
+                out[sid] = RouteResult(sid, Eligibility.RESTRICTED,
+                                       f"selector {alloc.state}: {alloc.reason}", False, True)
+                continue
+            mult *= min(1.0, alloc.multiplier)
         if h == StrategyHealth.DEGRADED:
             out[sid] = RouteResult(sid, Eligibility.DEGRADED, "strategy health DEGRADED", True, False, 0.5 * mult)
             continue

@@ -7,7 +7,7 @@ Positions still open at the end of the data are closed at the last close.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -16,14 +16,17 @@ from app.research.metrics import trade_metrics
 
 def simulate(o, h, l, c, longs, shorts, atr, sl_atr: float, rr: float, spread_price=None,
              commission_price: float = 0.0, start: int = 0, end: Optional[int] = None,
-             max_hold: int = 2000, min_stop_spread_multiple: float = 0.0) -> List[float]:
+             max_hold: int = 2000, min_stop_spread_multiple: float = 0.0, return_entries: bool = False):
     """R multiple of every trade whose SIGNAL bar lies in [start, end).
-    The stop is floored at `min_stop_spread_multiple` x the spread at entry, exactly as the live strategy does."""
+    The stop is floored at `min_stop_spread_multiple` x the spread at entry, exactly as the live strategy does.
+    With `return_entries` the result is (r multiples, [(signal bar, +1 long / -1 short), ...]) - the trades that
+    were actually taken, which the statistics need to re-score the same entries another way."""
     n = len(o)
     end = n if end is None else min(end, n)
     sp = np.zeros(n) if spread_price is None else np.nan_to_num(np.asarray(spread_price, float), nan=0.0)
     sig = np.flatnonzero((longs | shorts)[start:end]) + start
     out: List[float] = []
+    taken: List[Tuple[int, int]] = []
     busy_until = -1
     for j in sig:
         e = j + 1                                   # filled at the next bar's open
@@ -56,7 +59,8 @@ def simulate(o, h, l, c, longs, shorts, atr, sl_atr: float, rr: float, spread_pr
             raw = rr
         busy_until = k
         out.append(raw - (sp[e] + commission_price) / risk)
-    return out
+        taken.append((int(j), int(side)))
+    return (out, taken) if return_entries else out
 
 
 def grid_train_test(o, h, l, c, longs, shorts, atr, sl_grid, rr_grid, train_fraction: float, min_trades: int,
@@ -117,4 +121,55 @@ def simulate_signals(o, h, l, c, signals, spread_price=None, commission_price: f
             k, raw = e + i_tp, rr
         busy_until = k
         out.append(raw - (sp[e] + commission_price) / risk)
+    return out
+
+
+def trade_outcomes(o, h, l, c, signals: Sequence[Tuple[int, int, float, float]], spread_price=None,
+                   commission_price: float = 0.0, model: Optional[dict] = None, max_hold: int = 2000):
+    """R of each trade on its OWN (no one-position-at-a-time rule), stepped bar by bar through the same
+    `SimulatedTrade` the backtester and the counterfactual tracker use.
+
+    `signals` is (signal bar j, +1 long / -1 short, stop distance, reward:risk); the fill is the open of bar j+1,
+    at the ask for a buy, and exits happen on the bid for longs and the ask for shorts, so the spread is paid
+    where it is really paid. `model` None is a plain bracket; pass `with_execution_exits(...)` to score the exit
+    as it is traded (breakeven + profit lock). A reward:risk that is not finite means no target.
+
+    Re-scoring the SAME entries two ways is the point: flipped sides give the random-direction benchmark, and a
+    second exit model gives "what did the management add or cost" on identical trades."""
+    from app.alpha.exits import SimulatedTrade
+    from app.core.types import Side
+    n = len(o)
+    sp = np.zeros(n) if spread_price is None else np.nan_to_num(np.asarray(spread_price, float), nan=0.0)
+    out = np.full(len(signals), np.nan)
+    for t, (j, side, risk, rr) in enumerate(signals):
+        e = int(j) + 1
+        if e >= n or not np.isfinite(risk) or risk <= 0:
+            continue
+        s = Side.BUY if side > 0 else Side.SELL
+        entry = float(o[e]) + (float(sp[e]) if side > 0 else 0.0)
+        sl = entry - side * risk
+        tp = entry + side * risk * rr if np.isfinite(rr) and rr > 0 else None
+        sim = SimulatedTrade(s, entry, sl, tp, model or {}, 0, 0.0, float(sp[e]))
+        last = min(n, e + max_hold)
+        res = None
+        for k in range(e, last):
+            res = sim.step(float(o[k]), float(h[k]), float(l[k]), float(c[k]), float(sp[k]))
+            if res is not None:
+                break
+        r = res.r_multiple if res is not None else sim.mark_to_market(float(c[last - 1]), float(sp[last - 1]))
+        out[t] = r - commission_price / risk
+    return out
+
+
+def bracket_signals(entries: Sequence[Tuple[int, int]], atr, spread_price, sl_atr: float, rr: float,
+                    min_stop_spread_multiple: float = 0.0) -> List[Tuple[int, int, float, float]]:
+    """(signal bar, side) pairs from `simulate(..., return_entries=True)` turned into `trade_outcomes` input with
+    the same stop rule `simulate` applies (sl_atr x ATR, floored at a multiple of the spread at the fill)."""
+    n = len(atr)
+    sp = np.zeros(n) if spread_price is None else np.nan_to_num(np.asarray(spread_price, float), nan=0.0)
+    out = []
+    for j, side in entries:
+        e = min(int(j) + 1, n - 1)
+        out.append((int(j), int(side), max(sl_atr * float(atr[j]), min_stop_spread_multiple * float(sp[e])),
+                    float(rr)))
     return out

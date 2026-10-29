@@ -195,9 +195,12 @@ class TestGrossModeIsUnchanged(unittest.TestCase):
     def test_the_total_limit_still_refuses(self):
         self.assertEqual(self._reason(risk_money=20.0), "PORTFOLIO_OPEN_RISK_LIMIT")
 
-    def test_missing_correlation_history_still_refuses_in_gross_mode(self):
-        r = self._reason(external_risk_by_symbol={"XAUUSDm": 1.0})
-        self.assertEqual(r, "CORRELATION_HISTORY_INSUFFICIENT:XAUUSDm")
+    def test_missing_correlation_history_counts_as_fully_correlated_in_gross_mode(self):
+        """It used to refuse outright, which froze every symbol while one stock CFD was open (23 Oct 2026). An
+        unmeasurable pair now joins the correlated group, so the correlated cap still binds on it."""
+        self.assertIsNone(self._reason(external_risk_by_symbol={"XAUUSDm": 1.0}))
+        r = self._reason(external_risk_by_symbol={"XAUUSDm": 4.5}, max_correlated_risk=5.0)
+        self.assertEqual(r, "CORRELATED_OPEN_RISK_LIMIT")
 
     def test_the_correlated_group_limit_still_refuses(self):
         r = self._reason(external_risk_by_symbol={"XAUUSDm": 4.5},

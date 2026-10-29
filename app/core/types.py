@@ -225,6 +225,7 @@ class Gate(StrEnum):
     SYMBOL_DISABLED = "SYMBOL_DISABLED"     # per-symbol Start/Stop switch on the dashboard
     RESEARCH = "RESEARCH"                   # research lab found no edge for this strategy on this symbol
     ML_FILTER = "ML_FILTER"                 # learned trade filter scored this setup below its validated cut-off
+    SELECTOR = "SELECTOR"                   # strategy selector benched this strategy here (negative after costs)
 
 
 class RouteDecision(StrEnum):

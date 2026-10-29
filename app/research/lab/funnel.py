@@ -43,6 +43,12 @@ _CANDIDATE_ORDER = ["INSUFFICIENT_HISTORY", "H1_HISTORY_UNAVAILABLE", "ATR_NOT_R
 for _sid in ("breakout_retest_v1", "momentum_trend_v1", "session_breakout_v1", "vwap_reversion_v1",
              "htf_continuation_v1"):
     ORDER[_sid] = list(_CANDIDATE_ORDER)
+# Daily trend following reads the H4 store; the funnel replays M15 views without one, so it reports
+# H4_HISTORY_UNAVAILABLE there. Its real research is app/research/lab/trend.py over the H4 history.
+ORDER["trend_daily_v1"] = ["H4_HISTORY_UNAVAILABLE", "INSUFFICIENT_HISTORY", "ATR_NOT_READY", "NO_SETUP",
+                           "NO_PRICE", "INVALID_STOP_SIDE", "SETUP"]
+# the other daily rules are read through TrendDaily.evaluate, so they give exactly its reasons
+ORDER["trend_ensemble_v1"] = ORDER["turn_of_month_v1"] = ORDER["trend_daily_v1"]
 
 
 def _h1_index(m15: FeatureFrame, h1: FeatureFrame) -> np.ndarray:

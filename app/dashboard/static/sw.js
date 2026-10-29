@@ -65,7 +65,11 @@ self.addEventListener("fetch", (event) => {
   // instead of a browser error. Everything else falls through to the network untouched.
   if (event.request.mode !== "navigate") return;
   event.respondWith(
-    fetch(event.request).catch(() =>
+    // cache: "no-cache" makes the browser ask the server before reusing its own saved
+    // copy of a page. Without it, a page saved before an update was shown again for
+    // hours: on 20 Oct 2026 an old copy of the Live page loaded the new app.js without
+    // the scripts it needs and showed nothing. An unchanged page still costs one 304.
+    fetch(event.request.url, { cache: "no-cache", credentials: "same-origin" }).catch(() =>
       caches.open(VERSION).then((cache) => cache.match(OFFLINE_URL))
     )
   );

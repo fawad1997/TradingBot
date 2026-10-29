@@ -10,7 +10,8 @@ import logging
 import time
 from typing import Callable, Dict, Optional
 
-from app.alpha.exits import breakeven_sl, improves, on_bar_close, partial_level
+from app.alpha.exits import (breakeven_sl, improves, on_bar_close, partial_level, profit_lock_enabled,
+                             profit_lock_target)
 from app.broker.base import BrokerAdapter
 from app.core.types import Bar, OrderResult, Position, Side, SymbolSpec, Tick, TradeState
 from app.execution.book import TradeBook
@@ -38,10 +39,12 @@ class TradeManager:
                  small_win_activation_money: float = 0.20, small_win_floor_money: float = 0.05,
                  ambition_activation_money: float = 0.90, ambition_floor_money: float = 0.50,
                  protection_safety_buffer_points: float = 5.0, sl_modification_cooldown_sec: float = 5.0,
-                 close_when_profit_lock_unprotectable: bool = False):
+                 close_when_profit_lock_unprotectable: bool = False,
+                 clock: Optional[Callable[[], float]] = None):
         self.broker = broker
         self.book = book
         self.recon = reconciler
+        self._clock = clock or time.monotonic
         # last (mfe_r, mae_r) written to the database per trade, so _persist_extremes can skip a write when
         # the extremes have not moved far enough to be worth one
         self._last_persisted_extremes: Dict[str, tuple] = {}
@@ -413,34 +416,20 @@ class TradeManager:
                 small_floor = self._level(trade, "small_win_floor", 0.05)
                 ambition_activation = self._level(trade, "ambition_activation", 0.90)
                 ambition_floor = self._level(trade, "ambition_floor", 0.50)
-                if (ambition_activation > 0
-                        and st.profit_high_watermark_money >= ambition_activation):
-                    giveback = getattr(self, "profit_giveback_fraction", 0.0)
-                    if giveback > 0:        # trail the peak, give back at most this fraction
-                        lock_target = max(ambition_floor, st.profit_high_watermark_money * (1.0 - giveback))
-                    else:
-                        lock_target = max(
-                            ambition_floor,
-                            st.profit_high_watermark_money - (ambition_activation - ambition_floor),
-                        )
-                    lock_active = True
-                elif small_activation > 0 and st.profit_high_watermark_money >= small_activation:
-                    # Trail the peak here too, not only in the ambition tier. Previously this rung locked a flat
-                    # small_floor (0.1R), so a trade peaking anywhere between small_activation (0.5R) and
-                    # ambition_activation (0.8R) protected only 0.1R - a $10 peak on a $18.97 risk locked $1.90.
-                    # With profit_giveback_fraction 0.3 the same peak now locks $7.00, and the floor can only
-                    # ever rise, because lock_target is maxed against the previous one below.
-                    giveback = getattr(self, "profit_giveback_fraction", 0.0)
-                    lock_target = (max(small_floor, st.profit_high_watermark_money * (1.0 - giveback))
-                                   if giveback > 0 else small_floor)
-                    lock_active = True
+                # The ladder itself is app/alpha/exits.py::profit_lock_target, shared with the backtester and the
+                # counterfactual tracker so research judges the exit that actually trades. Both rungs trail the
+                # peak at profit_giveback_fraction (a $10 peak on an $18.97 risk locks $7.00, not a flat $1.90),
+                # and the target is maxed against the previous one, so the floor only ever rises.
+                # A strategy whose exit model says profit_lock.enabled = false (trend following) is never locked:
+                # banking 70% of a 0.5R peak would end every trend long before it pays.
+                if profit_lock_enabled(trade.get("exit_model")):
+                    lock_active, lock_target = profit_lock_target(
+                        st.profit_high_watermark_money, small_activation, small_floor, ambition_activation,
+                        ambition_floor, getattr(self, "profit_giveback_fraction", 0.0),
+                        previous_target=st.profit_lock_target_money, was_active=st.profit_lock_active,
+                        base_floor=self.profit_lock_floor_money)
                 else:
-                    lock_target = self.profit_lock_floor_money
-                    lock_active = st.profit_lock_active
-                lock_target = max(
-                    lock_target,
-                    st.profit_lock_target_money or 0.0,
-                )
+                    lock_active, lock_target = False, self.profit_lock_floor_money
                 # A floor below the round-trip cost is not protection: the close books a LOSS. Seven exits on
                 # 14-15 Oct came out at -0.08, -0.08, -0.12, -0.07, -0.08, -0.00 and -0.19R with the reason
                 # SMALL_WIN_PROFIT_FLOOR, because the base rung locks a flat profit_lock_floor_money ($0.05)
@@ -496,7 +485,7 @@ class TradeManager:
                                        else candidate > tick.ask + min_distance)
                     if improves(st, candidate, getattr(self, "min_sl_step_r", 0.0)) and clear_of_market:
                         result = self._modify_sl_result(trade, candidate, "DYNAMIC_PROFIT_FLOOR")
-                        if not result.ok and not result.already_closed and not result.ambiguous:
+                        if not result.ok and not result.already_closed and not result.ambiguous and result.retcode != RETCODE_SELF_COOLDOWN:
                             log.warning("Profit-lock stop change failed for %s (%s): %s",
                                         pos.symbol, result.retcode_text, result.comment)
                             current_pos, known = self._position(trade)

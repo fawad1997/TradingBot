@@ -135,13 +135,29 @@ def review(repo, now: datetime, hours: float = 8.0) -> Dict[str, Any]:
     # the raw figure per symbol, where it is meaningful, and report basis points for the aggregate.
     slips_by_symbol: Dict[str, List[float]] = {}
     slips_bp: List[float] = []
+    # An execution event carries neither its symbol nor the symbol's point, so both come from where they live: the
+    # trade it belongs to and the symbol's spec. Read off the event, the per-symbol table was one "?" row and the
+    # basis-point figure was always empty.
+    trade_ids = list({str(e["trade_id"]) for e in fills if e.get("trade_id")})
+    try:
+        symbol_of = {str(t["id"]): t.get("symbol") for t in (repo.select("trades", {"id": trade_ids}) if trade_ids else [])}
+    except Exception:
+        log.debug("session review could not read the fills' trades", exc_info=True)
+        symbol_of = {}
+    point_of: Dict[str, float] = {}
+    try:
+        for spec in repo.select("symbols", order_by="captured_at"):        # the newest spec of each symbol wins
+            if spec.get("symbol") and _num(spec.get("point")):
+                point_of[spec["symbol"]] = float(spec["point"])
+    except Exception:
+        log.debug("session review could not read symbol specs", exc_info=True)
     for e in fills:
         s, px = _num(e.get("slippage_points")), _num(e.get("price"))
-        sym = str(e.get("symbol") or "?")
+        sym = str(e.get("symbol") or symbol_of.get(str(e.get("trade_id"))) or "?")
         if s is None:
             continue
         slips_by_symbol.setdefault(sym, []).append(s)
-        point = _num(e.get("point")) or _num((e.get("detail") or {}).get("point") if isinstance(e.get("detail"), dict) else None)
+        point = _num(e.get("point")) or point_of.get(sym)
         if point and px:
             slips_bp.append(s * point / px * 10_000.0)
     # our own stop-move spacing, which used to be reported as a broker throttle

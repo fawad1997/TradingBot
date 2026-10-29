@@ -41,8 +41,18 @@ function header() {
     <div class="spacer"></div>
     <button id="killbtn" class="kill" title="Stops new signals and new orders. Existing broker stops stay in place.">EMERGENCY · HALT NEW TRADES</button>
   </div>
-  <div class="pills" id="pills"></div>`;
+  <div class="row2"><div class="pills" id="pills"></div>
+    <div class="helpbtns">
+      ${PAGE === "learn" ? "" : `<button id="learnbtn" class="hbtn primary" title="A five-minute animated walkthrough: what the bot does, how to read this screen, how to tell whether it works"><span class="ic" aria-hidden="true">&#9654;</span>Start here</button>
+      <button id="tourbtn" class="hbtn" title="A spotlight walks you over each part of this page">Explain this page</button>`}
+      <button id="modebtn" class="hbtn toggle" aria-pressed="true" title="Show or hide the explanatory line under each heading"><i class="knob" aria-hidden="true"></i>Explanations</button>
+    </div></div>`;
   $("#killbtn").onclick = onKill;
+  // the help controls only ever explain; none of them can change the bot
+  if ($("#learnbtn")) $("#learnbtn").onclick = () => LEARN.open();     // picks up where it was left, if unfinished
+  if ($("#tourbtn")) $("#tourbtn").onclick = () => HELP.tour();
+  $("#modebtn").onclick = () => HELP.toggleMode();
+  HELP.applyMode();
 }
 
 // Header pills, in plain words. The technical status still sits in the tooltip for anyone who wants it.
@@ -116,15 +126,43 @@ function renderHero(s) {
     if (tone === "good") tone = "wait";
   }
 
-  const pnl = a.today_pnl;
-  const money = pnl == null ? "" : `
-    <div class="money">
-      <div class="big ${cls(pnl)}">${signed(pnl)}</div>
-      <div class="cap">today${a.today_return != null ? ` · ${pct(a.today_return)} of the account` : ""}</div>
-      <div class="cap">balance ${n(a.balance)}${a.equity != null ? ` · worth ${n(a.equity)} with open trades` : ""}</div>
-    </div>`;
+  // The words are rebuilt only when they change, so a hovered explanation is not wiped every 1.5 s; the
+  // numbers are updated in place and roll to their new value.
+  const day = todaySplit(a);
+  const key = [tone, headline, sub, day.traded == null, day.other != null].join("|");
   el.className = "hero" + (tone === "good" ? "" : tone === "wait" ? " is-wait" : " is-bad");
-  el.innerHTML = `<div><h1>${esc(headline)}</h1><div class="sub">${esc(sub)}</div></div>${money}`;
+  if (el.dataset.key !== key) {
+    el.dataset.key = key;
+    el.innerHTML = `<div class="hero-l"><span class="orb ${tone}" aria-hidden="true"></span>
+        <div><h1>${esc(headline)}</h1><div class="sub">${esc(sub)}</div></div></div>
+      ${day.traded == null ? "" : `<div class="money">
+        <div class="big" id="hBig"></div>
+        <div class="cap">from trading today · banked <span id="hBank"></span> · ${defn("FLOATING", "open")} <span id="hOpen"></span></div>
+        ${day.other != null ? `<div class="cap wait" id="hOtherRow"><span id="hOther"></span> not from trading — a ${defn("DEPOSIT", "deposit or top-up")}, not profit</div>` : ""}
+        <div class="cap">${defn("BALANCE", "balance")} <span id="hBal"></span> · ${defn("EQUITY", "worth")} <span id="hEq"></span> with open trades</div>
+      </div>`}`;
+  }
+  if (day.traded == null) return;
+  const big = $("#hBig");
+  big.className = "big " + cls(day.traded);
+  VZ.countUp(big, day.traded, v => signed(v));
+  $("#hBank").textContent = signed(a.today_realized);
+  $("#hOpen").textContent = signed(a.floating_pnl);
+  if ($("#hOther")) $("#hOther").textContent = signed(day.other);
+  $("#hBal").textContent = n(a.balance);
+  $("#hEq").textContent = n(a.equity);
+}
+
+// What trading did today, kept apart from money that arrived any other way. The engine's today_pnl is "worth now
+// minus worth at the start of the day", so a deposit or a demo top-up during the day reads as profit there - on
+// 20 Oct 2026 the $500 -> $5,000 top-up showed as "+4,899 today". Banked results plus the open trades are what
+// trading did; whatever is left over is shown separately, with the same tolerance as tools/daily_review.py's
+// unexplained_balance (the larger of 1 and 0.2% of the balance), so swap rounding never looks like a deposit.
+function todaySplit(a) {
+  if (a.today_realized == null && a.floating_pnl == null) return {traded: a.today_pnl ?? null, other: null};
+  const traded = (+a.today_realized || 0) + (+a.floating_pnl || 0);
+  const gap = a.today_pnl == null ? 0 : a.today_pnl - traded;
+  return {traded, other: Math.abs(gap) >= Math.max(1, 0.002 * Math.abs(+a.balance || 0)) ? gap : null};
 }
 
 function strategySummary(s) {
@@ -176,19 +214,53 @@ function table(el, rows, cols, empty = "Nothing yet") {
 }
 
 // ------------------------------------------------------------------ chart
-function drawLine(canvas, pts, key) {
-  const dpr = window.devicePixelRatio || 1; const w = canvas.clientWidth, h = canvas.clientHeight;
-  canvas.width = w * dpr; canvas.height = h * dpr; const g = canvas.getContext("2d"); g.scale(dpr, dpr);
-  g.clearRect(0, 0, w, h);
-  if (!pts || pts.length < 2) { g.fillStyle = "#7c889a"; g.font = "13px sans-serif"; g.fillText("Equity curve appears after a few minutes of running", 12, 24); return; }
-  const ys = pts.map(p => p[key]); let lo = Math.min(...ys), hi = Math.max(...ys); if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
-  const pad = {l: 64, r: 10, t: 10, b: 22}; const x0 = pts[0].t, x1 = pts[pts.length - 1].t;
-  const X = t => pad.l + (t - x0) / (x1 - x0 || 1) * (w - pad.l - pad.r); const Y = v => pad.t + (hi - v) / (hi - lo) * (h - pad.t - pad.b);
-  g.strokeStyle = "#1f2836"; g.fillStyle = "#7c889a"; g.font = "11px Consolas, monospace"; g.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) { const v = lo + (hi - lo) * i / 4; const y = Y(v); g.beginPath(); g.moveTo(pad.l, y); g.lineTo(w - pad.r, y); g.stroke(); g.fillText(n(v), 4, y + 4); }
-  g.fillText(tm(x0).slice(0, 16), pad.l, h - 6); const last = tm(x1).slice(0, 16); g.fillText(last, w - pad.r - g.measureText(last).width, h - 6);
-  const up = ys[ys.length - 1] >= ys[0]; g.strokeStyle = up ? "#36b37e" : "#e5534b"; g.lineWidth = 2; g.beginPath();
-  pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p[key])) : g.moveTo(X(p.t), Y(p[key]))); g.stroke();
+// Timestamps arrive as ISO strings with microseconds; trim to milliseconds so every browser parses them.
+const epoch = v => typeof v === "number" ? v : Date.parse(String(v || "").replace(/(\.\d{3})\d+/, "$1")) / 1000;
+const isClosed = t => t && (t.state === "CLOSED" || t.state === "BROKER_CLOSED") && t.closed_at;
+
+// The account-value chart: the line, every finished trade as a dot you can click for its story, and a flag at
+// every balance change no finished trade explains - a deposit, a demo top-up or an account switch - so money that
+// was added never reads as money that was made.
+let EQ = null, EQ_SIG = "";
+async function loadEquity() {
+  const canvas = $("#equity"); if (!canvas) return;
+  const hours = $("#eqh") ? $("#eqh").value : 168, key = $("#eqkey") ? $("#eqkey").value : "equity";
+  let pts = [], trades = [];
+  try { pts = await (await fetch("/api/equity?hours=" + hours)).json(); } catch (_) { return; }
+  try { trades = await (await fetch("/api/logs/trades?limit=500")).json(); } catch (_) {}
+  if (!Array.isArray(pts)) pts = [];
+  const since = pts.length ? pts[0].t : Infinity;
+  const closed = (Array.isArray(trades) ? trades : []).filter(isClosed)
+    .map(t => ({...t, ct: epoch(t.closed_at)})).filter(t => t.ct >= since - 300);
+  const markers = closed.map(t => ({t: t.ct, tone: +t.net_pnl > 0 ? "good" : +t.net_pnl < 0 ? "bad" : "mut", data: t,
+    label: `<b class="${cls(t.net_pnl)}">${+t.net_pnl >= 0 ? "Won" : "Lost"} ${n(Math.abs(+t.net_pnl || 0))}</b> on ${esc(t.symbol)}`
+      + `<br><span class="mut">${esc(t.strategy_id || "")}${t.r_multiple == null ? "" : " · " + signed(t.r_multiple) + "R"} · ${esc(tm(t.ct).slice(0, 16))}</span>`
+      + `<br><span class="mut">click for the story of this trade</span>`}));
+  const flags = [];
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i].balance - pts[i - 1].balance;
+    if (!d) continue;
+    // trades closing a little either side of the snapshot pair still explain the step; snapshots lag the broker
+    const explained = closed.filter(t => t.ct > pts[i - 1].t - 180 && t.ct <= pts[i].t + 180).reduce((s, t) => s + (+t.net_pnl || 0), 0);
+    const gap = d - explained;
+    if (Math.abs(gap) >= Math.max(1, 0.002 * Math.abs(pts[i].balance))) flags.push({t: pts[i].t, amount: gap, short: `${signed(gap, 0)} not from trading`,
+      label: `<b class="wait">${signed(gap)}</b> balance change that no finished trade explains<br><span class="mut">a deposit, a demo top-up or an account switch — not profit</span>`});
+  }
+  if (!EQ) EQ = VZ.lineChart(canvas, {formatX: v => tm(v).slice(5, 16), formatY: v => n(v), onMarker: t => VZ.tradeStory(t),
+    empty: "The line appears after a few minutes of running"});
+  const sig = hours + "|" + key;
+  if (sig !== EQ_SIG) { EQ_SIG = sig; EQ.set({pts, key, markers, flags}); } else EQ.update({pts, markers, flags});
+}
+
+// Rows of a table that are finished trades open their story when clicked (or Enter on the keyboard).
+function storyRows(el, rows, ok = isClosed) {
+  if (!el || !rows) return;
+  el.querySelectorAll("tbody tr").forEach((tr, i) => {
+    if (rows[i] && ok(rows[i])) { tr.classList.add("click"); tr.tabIndex = 0; }
+  });
+  const pick = tr => tr && tr.classList.contains("click") && VZ.tradeStory(rows[[...tr.parentNode.children].indexOf(tr)]);
+  el.onclick = e => pick(e.target.closest("tbody tr"));
+  el.onkeydown = e => { if (e.key === "Enter") pick(e.target.closest("tbody tr")); };
 }
 
 // ------------------------------------------------------------------ live feed
@@ -214,19 +286,32 @@ const FEED_LABEL = {
       .filter(Boolean).join(" · ")],
   strategy_state: e => ["Market shape", e.regime ? `${say(e.regime.label)} · ${say(e.regime.vol)}` : ""]};
 
-function pushFeed(e) {
+// The colour of a feed line follows the same rule as everywhere else: it describes the situation. A refused
+// signal is the bot working, so it reads calm; money lost on a closed trade reads coral.
+const FEED_TONE = {
+  execution_event: e => e.error ? "bad" : /FILL/.test(String(e.event_type || "")) ? "good" : "info",
+  trade_update: e => +e.net_pnl > 0 ? "good" : +e.net_pnl < 0 ? "bad" : "info",
+  rejection_event: e => e.counterfactual_resolved ? (+e.hypothetical_r > 0 ? "wait" : "good") : term(e.reason || e.gate).tone,
+  risk_state: e => term(e.state).tone, signal_event: () => "info", health_event: () => "info",
+  straddle_event: () => "info", strategy_state: () => "mut"};
+
+function pushFeed(e, fresh = false) {
   const f = FEED_LABEL[e.event]; if (!f) return;
-  const [a, b] = f(e); FEED.unshift({t: e.ts, a, b, raw: e.event}); if (FEED.length > 300) FEED.pop();
+  const [a, b] = f(e);
+  FEED.unshift({t: e.ts, a, b, raw: e.event, tone: (FEED_TONE[e.event] || (() => "info"))(e)}); if (FEED.length > 300) FEED.pop();
   const el = $("#feed");
-  if (el) el.innerHTML = FEED.map(x => `<div title="${esc(x.raw)}"><span class="t">${hhmmss(x.t)}</span>
+  // only the line that just arrived slides in; the rest stay still
+  if (el) el.innerHTML = FEED.map((x, i) => `<div class="fi ${x.tone}${fresh && i === 0 ? " new" : ""}" title="${esc(x.raw)}"><span class="t">${hhmmss(x.t)}</span>
     <span class="a">${esc(x.a)}</span><span>${esc(x.b)}</span></div>`).join("");
 }
 
+// One ping timer per connection, cleared when it closes: every reconnect used to add a timer that never stopped.
+// The server closes a connection that stays silent (api.WS_IDLE_SEC), so the ping is what keeps a live page fed.
 function connectWS() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onmessage = m => { try { JSON.parse(m.data).forEach(e => { if (e.event === "state") { STATE = e; } else pushFeed(e); }); } catch (_) {} };
-  ws.onclose = () => setTimeout(connectWS, 2000);
-  setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 20000);
+  const ping = setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 20000);
+  ws.onmessage = m => { try { JSON.parse(m.data).forEach(e => { if (e.event === "state") { STATE = e; } else pushFeed(e, true); }); } catch (_) {} };
+  ws.onclose = () => { clearInterval(ping); setTimeout(connectWS, 2000); };
 }
 
 // ------------------------------------------------------------------ pages
@@ -259,9 +344,12 @@ function renderOverview(s) {
   const a = s.account || {};
   renderHero(s);
   renderOpenPositions(s);
-  kpis($("#acct"), [["Balance", n(a.balance)], ["Worth now", n(a.equity)], ["Free margin", n(a.free_margin)],
-    ["Margin in use", n(a.margin)], ["Margin level", a.margin_level ? n(a.margin_level, 0) + "%" : "–"],
-    ["Today", signed(a.today_pnl), cls(a.today_pnl)], ["Today %", pct(a.today_return), cls(a.today_return)]]);
+  const day = todaySplit(a);
+  kpis($("#acct"), [[defn("BALANCE", "Balance"), n(a.balance)], [defn("EQUITY", "Worth now"), n(a.equity)], ["Free margin", n(a.free_margin)],
+    [defn("MARGIN", "Margin in use"), n(a.margin)], ["Margin level", a.margin_level ? n(a.margin_level, 0) + "%" : "–"],
+    ["Today from trading", signed(day.traded), cls(day.traded)],
+    day.other != null ? [defn("DEPOSIT", "Today, not from trading"), signed(day.other), "wait"]
+                      : ["Today %", pct(day.traded != null && a.balance ? day.traded / a.balance : null), cls(day.traded)]]);
   const st = s.strategies || {};
   table($("#strats"), Object.entries(st).map(([id, v]) => ({id, ...v})),
     [["id", "Rule"], ["status", "Cleared for", v => v === "DEMO" ? "practice account" : String(v || "").toLowerCase()],
@@ -289,15 +377,16 @@ function renderOverview(s) {
   renderStatusReasons(s, $("#statusReasons"));
   const rt = term(r.state || "UNKNOWN");
   const mult = r.multiplier == null ? null : Math.round(r.multiplier * 100);
+  renderRiskViz(r);
   $("#risk").innerHTML = `<div class="kv">
     <span>Right now</span><span class="${STATUS_CLASS(r.state)}">${esc(rt.say)}</span>
     <span>Size per trade</span><span>${mult == null ? "–" : mult + "% of normal"}</span>
-    <span>Down from its best</span><span class="${r.drawdown > 0.05 ? "wait" : ""}">${pct(r.drawdown)}</span>
+    <span>${defn("DRAWDOWN", "Down from its best")}</span><span class="${r.drawdown > 0.05 ? "wait" : ""}">${pct(r.drawdown)}</span>
     <span>Best the account has been</span><span>${n(r.peak_equity)}</span>
-    <span>Today</span><span class="${cls(r.daily_pnl)}">${signed(r.daily_pnl)}</span>
+    <span>Today from trading</span><span class="${cls(day.traded)}">${signed(day.traded)}</span>
     <span>Can still lose today</span><span>${n(r.daily_loss_remaining)}</span></div>
     ${rt.mean ? `<div class="note">${esc(rt.mean)}</div>` : ""}
-    ${r.reason ? `<div class="note">${esc(explain(r.reason))}</div>` : ""}`;
+    ${r.reason && r.reason !== "ok" ? `<div class="note">${esc(explain(r.reason))}</div>` : ""}`;
 
   const c = s.components || {};
   const val = {HEALTHY: 1, MARKET_CLOSED: .7, WATCH: .7, DEGRADED: .4, DOWN: .05, UNKNOWN: .2};
@@ -326,40 +415,83 @@ function renderOpenPositions(s) {
       its live profit or loss, and how close it is to its stop and target.</div>`;
     return;
   }
-  el.innerHTML = rows.map(p => {
-    const d = p.digits != null ? p.digits : 2;
-    const buy = String(p.side).toUpperCase() === "BUY";
-    const entry = p.entry, now = p.current ?? entry;
-    // The track runs stop -> target, so the left edge is always "the losing end" whichever way the trade
-    // faces. A BUY has its stop below and target above; a SELL is the mirror image, so both are mapped onto
-    // the same left-is-bad axis rather than drawn upside down for half the positions.
-    const stop = p.sl ?? entry, target = p.tp ?? entry;
-    const lo = Math.min(stop, target, entry, now), hi = Math.max(stop, target, entry, now);
-    const span = (hi - lo) || 1;
-    const raw = v => ((v - lo) / span) * 100;
-    const at = buy ? raw : v => 100 - raw(v);          // flip for sells so right is always "winning"
-    const a = at(entry), b = at(now);
-    const up = (p.floating_pnl ?? 0) >= 0;
-    const protectedNow = p.sl != null && (buy ? p.sl >= entry : p.sl <= entry);
-    return `<div class="pos">
-      <div class="r1"><span class="who">${esc(p.symbol)} ${esc(buy ? "buy" : "sell")} ${n(p.volume, 2)}</span>
-        <span class="amt ${cls(p.floating_pnl)}">${signed(p.floating_pnl)}</span></div>
-      <div class="r2">${esc(p.strategy || "opened by hand")} · ${protectedNow
-        ? '<span class="good">can no longer lose &mdash; the stop has been moved past the entry price</span>'
-        : "the stop is still on the losing side of the entry price"}${
-        p.managed ? "" : ' · <span class="wait">opened outside the bot</span>'}</div>
-      <div class="bar" title="how far price has travelled from the entry towards the target">
-        <i style="left:${Math.min(a, b)}%;width:${Math.max(0.8, Math.abs(b - a))}%;
-           background:${up ? "var(--seafoam)" : "var(--coral)"}"></i>
-        <i style="left:calc(${a}% - 1px);width:2px;background:var(--dim)" title="entry"></i>
-      </div>
-      <div class="legend"><span title="the price that closes this trade for a loss">stop ${n(p.sl, d)}</span>
-        <span title="where the price is now">now ${n(now, d)}</span>
-        <span title="the price that closes this trade for a profit">target ${n(p.tp, d)}</span></div>
-    </div>`;
-  }).join("");
+  const empty = el.querySelector(".empty"); if (empty) empty.remove();
+  // Cards are kept and updated in place, keyed by ticket, so the "now" marker glides to each new price
+  // instead of the whole card being redrawn every 1.5 seconds.
+  const seen = new Set();
+  rows.forEach(p => {
+    const id = String(p.ticket); seen.add(id);
+    let card = [...el.children].find(c => c.dataset.t === id);
+    if (!card) {
+      card = document.createElement("div"); card.className = "pos"; card.dataset.t = id;
+      card.innerHTML = `<div class="r1"><span class="who"></span><span class="amt"></span></div><div class="r2"></div>
+        <div class="ptrack" tabindex="0" aria-label="Where the price sits between the stop and the target">
+          <i class="pz bad"></i><i class="pz good"></i><i class="pmove"></i><i class="pentry"></i><i class="pnow"></i></div>
+        <div class="legend"><span class="l-stop"></span><span class="l-now"></span><span class="l-tgt"></span></div>`;
+      const track = card.querySelector(".ptrack");
+      track.addEventListener("pointermove", e => { const r = track.getBoundingClientRect(); priceTip(card._g, (e.clientX - r.left) / r.width, e.clientX, e.clientY); });
+      track.addEventListener("pointerleave", () => VZ.untip());
+      track.addEventListener("focus", () => { const r = track.getBoundingClientRect(); priceTip(card._g, card._g.fNow, r.left + r.width * card._g.fNow, r.bottom); });
+      track.addEventListener("blur", () => VZ.untip());
+      el.appendChild(card);
+    }
+    fillPosition(card, p);
+  });
+  [...el.children].forEach(c => { if (c.dataset.t && !seen.has(c.dataset.t)) c.remove(); });
 }
 
+// The track runs stop -> target, so the left edge is always "the losing end" whichever way the trade faces.
+// (v - stop) / (target - stop) maps a BUY and a SELL onto the same left-is-bad axis without flipping anything.
+function fillPosition(card, p) {
+  const d = p.digits != null ? p.digits : 2;
+  const buy = String(p.side).toUpperCase() === "BUY";
+  const entry = +p.entry, now = +(p.current ?? entry);
+  const away = Math.abs(now - entry) || Math.abs(entry) * 0.001 || 1;
+  // MT5 reports "no stop" / "no target" as 0.0, not null: read as a price it printed "stop 0.00" and told a SELL
+  // with no stop at all that it "can no longer lose" (0 is below any entry)
+  const sl = p.sl != null && +p.sl !== 0 ? +p.sl : null, tp = p.tp != null && +p.tp !== 0 ? +p.tp : null;
+  let stop = sl, target = tp;
+  if (stop == null && target == null) { stop = entry - (buy ? 2 : -2) * away; target = entry + (buy ? 2 : -2) * away; }
+  else if (stop == null) stop = entry - (target - entry);
+  else if (target == null) target = entry + (entry - stop);
+  const F = v => VZ.clamp((v - stop) / ((target - stop) || 1), 0, 1);
+  const fE = F(entry), fN = F(now);
+  const protectedNow = sl != null && (buy ? sl >= entry : sl <= entry);
+  const q = s => card.querySelector(s);
+  q(".who").textContent = `${p.symbol} ${buy ? "buy" : "sell"} ${n(p.volume, 2)}`;
+  const amt = q(".amt"); amt.className = "amt " + cls(p.floating_pnl); VZ.countUp(amt, p.floating_pnl, v => signed(v), 500);
+  const r2 = `${esc(p.strategy || "opened by hand")} · ${protectedNow
+    ? '<span class="good">can no longer lose &mdash; the stop has been moved past the entry price</span>'
+    : `the ${defn("STOP", "stop")} is still on the losing side of the entry price`}${p.managed ? "" : ' · <span class="wait">opened outside the bot</span>'}`;
+  if (card._r2 !== r2) { card._r2 = r2; q(".r2").innerHTML = r2; }
+  const pz = card.querySelectorAll(".pz");
+  pz[0].style.width = fE * 100 + "%";
+  pz[1].style.left = fE * 100 + "%"; pz[1].style.width = (1 - fE) * 100 + "%";
+  const mv = q(".pmove");
+  mv.style.left = Math.min(fE, fN) * 100 + "%"; mv.style.width = Math.max(0.6, Math.abs(fN - fE) * 100) + "%";
+  mv.className = "pmove " + ((p.floating_pnl ?? 0) >= 0 ? "good" : "bad");
+  q(".pentry").style.left = fE * 100 + "%";
+  q(".pnow").style.left = fN * 100 + "%";
+  q(".l-stop").textContent = sl == null ? "no stop" : `stop ${n(sl, d)}`; q(".l-now").textContent = `now ${n(now, d)}`;
+  q(".l-tgt").textContent = tp == null ? "no target" : `target ${n(tp, d)}`;
+  // what any price on the track would mean in money: a straight line through (entry, 0) and (now, open P/L)
+  const perPrice = Math.abs(now - entry) > 0 && p.floating_pnl != null ? +p.floating_pnl / (now - entry) : null;
+  const risk = sl != null && !protectedNow ? Math.abs(entry - sl) : null;
+  card._g = {stop, target, entry, d, perPrice, risk, dir: buy ? 1 : -1, fNow: fN};
+}
+
+function priceTip(g, frac, x, y) {
+  if (!g) return;
+  const price = g.stop + VZ.clamp(frac, 0, 1) * (g.target - g.stop);
+  const money = g.perPrice == null ? null : g.perPrice * (price - g.entry);
+  const r = g.risk ? (price - g.entry) * g.dir / g.risk : null;
+  VZ.tip(`If price reaches <b>${n(price, g.d)}</b>:<br>`
+    + (money == null ? `<span class="mut">about ${r == null ? "–" : signed(r) + "R"} (money appears once price has moved)</span>`
+      : `<b class="${cls(money)}">${signed(money)}</b>${r == null ? "" : ` <span class="mut">· ${signed(r)}R</span>`}`)
+    + `<br><span class="mut">left end = stop, right end = target</span>`, x, y);
+}
+
+const TILE_LINE = {};
 function renderSymbolSwitch(s) {
   const sw = s.symbol_trading || {}, mk = s.symbol_market_status || {}, pos = s.positions || [], st = s.news_straddle || {};
   const el = $("#symbolTiles");
@@ -379,9 +511,14 @@ function renderSymbolSwitch(s) {
       else if (mine.length) line = `${mine.length} trade${mine.length === 1 ? "" : "s"} open`;
       else if (straddle.state && straddle.state !== "IDLE") line = say(straddle.state);
       else line = "Watching";
-      const tone = !on ? "mut" : (market && market !== "OPEN") ? "mut" : mine.length ? cls(pnl) || "good" : "good";
-      return `<button class="tile ${on ? "" : "off"}" data-sym="${esc(sym)}" data-on="${on ? 1 : 0}"
-          title="${esc(sym)} — click to ${on ? "stop" : "start"} new trades">
+      // a tile whose sentence changed since the last refresh flashes once, so a change catches the eye
+      const changed = TILE_LINE[sym] !== undefined && TILE_LINE[sym] !== line;
+      TILE_LINE[sym] = line;
+      const tipText = `${sym}\n${line}${market ? `\nmarket: ${String(market).toLowerCase().replace(/_/g, " ")}` : ""}`
+        + `${mine.length ? `\nopen profit or loss: ${signed(pnl)}` : ""}\n\nClick to ${on ? "STOP" : "START"} new trades here (it asks first).`
+        + `${on ? "\nOpen trades are never touched." : ""}`;
+      return `<button class="tile ${on ? "" : "off"}${changed ? " flash" : ""}" data-sym="${esc(sym)}" data-on="${on ? 1 : 0}"
+          data-tip="${esc(tipText)}" aria-label="${esc(sym)} — ${esc(line)}. Click to ${on ? "stop" : "start"} new trades">
         <div class="top"><span class="sym">${esc(sym)}</span>
           <span class="dot ${!on ? "" : mine.length ? "good live" : "good"}"></span></div>
         <div class="st">${esc(line)}</div>
@@ -442,6 +579,9 @@ function renderStatusReasons(s, element) {
 // The funnel: how many chances the bot looked at, and where they fell out. This is the single most useful
 // thing on the page when the answer to "why so few trades" is wanted, so it is built from the real
 // candidate-evaluation records rather than a guess.
+// The counts come from funnelModel() in glossary.js, which the walkthrough uses too, so the two can never
+// disagree. Each step is a button: it lists why chances fell out just before it.
+let FUNNEL = null, FUNNEL_FLOW = null, FUNNEL_GAP = null;
 async function loadFunnel() {
   const box = $("#funnel"), list = $("#funnelReasons");
   if (!box) return;
@@ -451,46 +591,79 @@ async function loadFunnel() {
     box.innerHTML = `<div class="empty"><b>Nothing recorded yet</b>${esc(d.error || "This fills in once the bot has looked at a few candles.")}</div>`;
     list.innerHTML = ""; return;
   }
-  const looked = d.evaluations || 0;
-  const byStage = {};
-  d.groups.forEach(g => { byStage[g.stage] = (byStage[g.stage] || 0) + g.count; });
-  const noSetup = byStage.STRATEGY || 0;
-  const matched = Math.max(0, looked - noSetup);
-  const traded = (byStage.EXECUTED || 0) || d.traded || 0;
-  const steps = [
-    ["Chances looked at", looked, "Every time a rule checked a finished candle."],
-    ["Matched a rule", matched, "The chart actually looked like the setup."],
-    ["Became a trade", traded, "Passed every safety and cost check too."],
-  ];
-  const max = Math.max(1, looked);
-  box.innerHTML = steps.map(([label, v, why], i) => `
-    <div class="fstep" title="${esc(why)}">
-      <span>${label}</span>
-      <div class="track"><div class="fill ${i === 0 ? "lead" : ""}" style="width:${Math.max(1.5, 100 * v / max)}%"></div></div>
-      <span class="n">${n(v, 0)}</span>
-    </div>`).join("");
+  if (typeof funnelModel !== "function") {        // an old saved glossary.js - see start() at the bottom
+    box.innerHTML = `<div class="empty"><b>Reload the page</b>This panel needs the current version of the page. Press Ctrl+F5.</div>`;
+    list.innerHTML = ""; return;
+  }
+  FUNNEL = funnelModel(d);
+  if (FUNNEL_GAP == null) FUNNEL_GAP = FUNNEL.reasons[3].length ? 3 : 2;
+  if (!FUNNEL_FLOW && $("#funnelFlow")) FUNNEL_FLOW = VZ.flow($("#funnelFlow"), {onPick: i => { FUNNEL_GAP = i; renderFunnel(); }});
+  if (FUNNEL_FLOW) FUNNEL_FLOW.set(FUNNEL.steps);
+  renderFunnel();
+}
 
-  // the reasons themselves, biggest first, in plain words
-  const merged = {};
-  d.groups.forEach(g => {
-    const t = term(g.reason || g.gate || g.stage);
-    const key = t.say;
-    if (!merged[key]) merged[key] = {n: 0, tone: t.tone, mean: t.mean, code: g.reason || g.gate};
-    merged[key].n += g.count;
-  });
-  const top = Object.entries(merged).sort((a, b) => b[1].n - a[1].n).slice(0, 7);
-  list.innerHTML = top.length ? top.map(([say_, v]) => `
+function renderFunnel() {
+  const box = $("#funnel"), list = $("#funnelReasons"), F = FUNNEL;
+  if (!F) return;
+  const names = ["Chances looked at", "Its rule was switched on", "Matched a rule's setup", "Became a trade"];
+  const max = Math.max(1, F.looked);
+  box.innerHTML = F.steps.map((s, i) => `
+    <button class="fstep${i && i === FUNNEL_GAP ? " on" : ""}" ${i ? `data-gap="${i}"` : "disabled"}
+        data-tip="${esc(i ? `${n(F.steps[i - 1].value - s.value, 0)} ${s.drop.label} before this step.\n${s.drop.why}\nClick to see the reasons.` : "Every time a rule checked a finished candle today.")}">
+      <span>${names[i]}</span>
+      <div class="track"><div class="fill ${i === 0 ? "lead" : i === 3 ? "last" : ""}" style="width:${Math.max(1.5, 100 * s.value / max)}%"></div></div>
+      <span class="n">${n(s.value, 0)}</span>
+      <span class="drop ${i ? s.drop.tone : ""}">${i ? `−${n(F.steps[i - 1].value - s.value, 0)} ${esc(s.drop.label)}` : ""}</span>
+    </button>`).join("");
+  box.onclick = e => { const b = e.target.closest("[data-gap]"); if (!b) return; FUNNEL_GAP = +b.dataset.gap; renderFunnel(); };
+  const step = F.steps[FUNNEL_GAP], top = (F.reasons[FUNNEL_GAP] || []).slice(0, 7);
+  const most = Math.max(1, ...top.map(x => x.n));
+  list.innerHTML = `<div class="reasons-h"><b>${n(F.steps[FUNNEL_GAP - 1].value - step.value, 0)} ${esc(step.drop.label)}</b>
+      <span class="mut">— ${esc(step.drop.why)}${FUNNEL_GAP === 2 ? " One candle can fail several conditions, so these add up to more." : ""}</span></div>`
+    + (top.length ? top.map(v => `
     <div class="reason ${v.tone}">
-      <div><div>${esc(say_)}</div>${v.mean ? `<div class="why">${esc(v.mean)}</div>` : ""}</div>
+      <div><div>${esc(v.say)}</div>${v.mean ? `<div class="why">${esc(v.mean)}</div>` : ""}</div>
+      <span class="rbar"><i style="width:${Math.max(2, 100 * v.n / most)}%"></i></span>
       <span class="n" title="${esc(v.code || "")}">${n(v.n, 0)}</span>
-    </div>`).join("")
-    : `<div class="empty">No blocked chances in this window.</div>`;
+    </div>`).join("") : `<div class="empty">Nothing dropped out at this step today.</div>`);
+}
+
+// Seatbelts, drawn: a gauge for how much it may still lose today and a ladder showing how far the account is
+// below its best against the points where trade sizes are cut. Both update in place, so they slide rather
+// than redraw. The tiers come from the settings file through /api/config.
+let RISK_CFG = null;
+async function loadRiskCfg() {
+  try { RISK_CFG = ((await (await fetch("/api/config")).json()).app || {}).risk || null; } catch (_) {}
+}
+function renderRiskViz(r) {
+  const gEl = $("#riskGauge"), lEl = $("#riskLadder");
+  if (gEl) {
+    const lim = RISK_CFG && r.day_start_equity ? RISK_CFG.daily_loss_limit_fraction * r.day_start_equity : null;
+    const left = r.daily_loss_remaining;
+    VZ.gauge(gEl, {value: left, max: lim || left || 1, text: n(left), sub: lim ? `of ${n(lim)} left` : "left today",
+      label: `Can still lose today${RISK_CFG ? ` <span class="mut">(${pct(RISK_CFG.daily_loss_limit_fraction, 0)} of the day's start)</span>` : ""}`});
+  }
+  if (!lEl || !RISK_CFG) return;
+  const c = RISK_CFG, top = Math.max(0.35, (c.dd_emergency || 0.3) + 0.05), P = v => Math.min(100, v / top * 100);
+  if (!lEl._built) {
+    lEl._built = true;
+    const tiers = [[0, c.dd_reduced, "full size", "good"], [c.dd_reduced, c.dd_restricted, "half", "wait"],
+      [c.dd_restricted, c.dd_no_new_trades, "quarter", "wait"], [c.dd_no_new_trades, c.dd_emergency, "no new trades", "bad"],
+      [c.dd_emergency, top, "emergency", "bad"]];
+    lEl.innerHTML = `<div class="ld-h">${defn("DRAWDOWN", "How far below its best")}</div>
+      <div class="ld-track">${tiers.map(([a, b, name, tone]) => `<i class="ld-seg ${tone}" style="left:${P(a)}%;width:${P(b) - P(a)}%"
+          data-tip="${esc(`${pct(a, 0)} to ${pct(b, 0)} below its best: ${name === "full size" ? "trades at full size" : name === "half" ? "every new trade at half size" : name === "quarter" ? "every new trade at a quarter size" : name === "no new trades" ? "opens no new trades" : "emergency stop: everything new halted"}`)}"></i>`).join("")}
+        <i class="ld-mark"></i></div>
+      <div class="ld-ticks">${tiers.map(([a, , name]) => `<span style="left:${P(a)}%">${a ? "−" + pct(a, 0) : "0"}<em>${name}</em></span>`).join("")}</div>
+      <div class="ld-now"></div>`;
+  }
+  const dd = Math.max(0, +r.drawdown || 0);
+  lEl.querySelector(".ld-mark").style.left = P(dd) + "%";
+  lEl.querySelector(".ld-now").innerHTML = `Now <b>${pct(dd, 1)}</b> below its best of ${n(r.peak_equity)} — ${esc(term(r.state || "UNKNOWN").say.toLowerCase())}.`;
 }
 
 async function loadOverviewSlow() {
-  try {
-    drawLine($("#equity"), await (await fetch("/api/equity?hours=" + ($("#eqh") ? $("#eqh").value : 168))).json(), "equity");
-  } catch (_) {}
+  loadEquity();
   loadFunnel();
   try {
     const cf = await (await fetch("/api/counterfactuals/summary?days=1")).json();
@@ -499,7 +672,11 @@ async function loadOverviewSlow() {
       : r > 0.1 ? "The skipped trades would have made money on balance — the rules may be too strict."
       : r < -0.1 ? "The skipped trades would have lost money — the rules are earning their keep."
       : "The skipped trades roughly break even.";
-    $("#cf").innerHTML = `<div class="kv">
+    const won = +cf.would_have_won || 0, lost = +cf.would_have_lost || 0, open = +cf.still_open || 0, all = won + lost + open;
+    const seg = (v, c, t) => v ? `<i class="${c}" style="width:${100 * v / all}%" data-tip="${esc(t)}"></i>` : "";
+    $("#cf").innerHTML = (all ? `<div class="stack" aria-label="Skipped trades: would have won, would have lost, still open">
+        ${seg(won, "good", `${won} would have won — the check may have cost money there`)}${seg(lost, "bad", `${lost} would have lost — the check saved money there`)}${seg(open, "mut", `${open} still being followed on paper`)}</div>` : "")
+      + `<div class="kv">
       <span>Signals it chose not to take</span><span>${cf.rejected ?? "–"}</span>
       <span>Those that would have won</span><span class="good">${cf.would_have_won ?? "–"}</span>
       <span>Those that would have lost</span><span class="bad">${cf.would_have_lost ?? "–"}</span>
@@ -507,29 +684,34 @@ async function loadOverviewSlow() {
       <span>Net, in risk units</span><span class="${cls(r)}">${signed(r)}R</span>
       <span>Rule that cost the most</span><span>${esc(say(cf.most_expensive_gate || "–"))}</span>
       <span>Rule that saved the most</span><span>${esc(say(cf.most_valuable_gate || "–"))}</span></div>
-      <div class="note">${esc(verdict)} “R” means one trade's risk: +1R is a win the size of what was risked.</div>`;
+      <div class="note">${esc(verdict)} ${defn("R", "“R”")} means one trade's risk: +1R is a win the size of what was risked.</div>`;
   } catch (_) {}
 }
 
 function renderRealtime(s) {
   const a = s.account || {}, m = s.market || {};
-  kpis($("#top"), [["Balance", n(a.balance)], ["Worth now", n(a.equity)],
-    ["Open trades", signed(a.floating_pnl), cls(a.floating_pnl)],
-    ["Banked today", signed(a.today_realized), cls(a.today_realized)], ["Margin in use", n(a.margin)],
-    ["Buy/sell gap", n(m.spread_points, 0) + " pts"],
+  kpis($("#top"), [[defn("BALANCE", "Balance"), n(a.balance)], [defn("EQUITY", "Worth now"), n(a.equity)],
+    [defn("FLOATING", "Open trades"), signed(a.floating_pnl), cls(a.floating_pnl)],
+    ["Banked today", signed(a.today_realized), cls(a.today_realized)], [defn("MARGIN", "Margin in use"), n(a.margin)],
+    [defn("SPREAD", "Buy/sell gap"), n(m.spread_points, 0) + " pts"],
     ["Broker response", m.broker_latency_ms != null ? n(m.broker_latency_ms, 0) + " ms" : "–"]]);
   renderOpenPositions(s);
   const gapShare = m.spread_points != null && m.spread_limit_points ? m.spread_points / m.spread_limit_points : null;
+  if ($("#gapGauge")) VZ.gauge($("#gapGauge"), {value: m.spread_points, max: m.spread_limit_points || m.spread_points || 1,
+    text: m.spread_points == null ? "–" : n(m.spread_points, 0) + " pts", sub: m.spread_limit_points ? `of ${n(m.spread_limit_points, 0)} allowed` : "",
+    tone: gapShare == null ? "mut" : gapShare > 1 ? "bad" : gapShare > 0.8 ? "wait" : "good",
+    label: `${defn("SPREAD", "Buy/sell gap")} on ${esc(s.symbol || "this market")} — ${gapShare == null ? "no limit known"
+      : gapShare > 1 ? "too wide: it will not trade here now" : gapShare > 0.8 ? "close to its limit" : "comfortably inside its limit"}`});
   $("#market").innerHTML = `<div class="kv">
     <span>Sell price (bid)</span><span>${n(m.bid)}</span>
     <span>Buy price (ask)</span><span>${n(m.ask)}</span>
     <span>Gap between them</span><span class="${gapShare != null && gapShare > 1 ? "bad" : gapShare != null && gapShare > .8 ? "wait" : ""}">${n(m.spread_points, 0)} pts${m.spread_limit_points != null ? ` of ${n(m.spread_limit_points, 0)} allowed` : ""}</span>
     ${m.spread_limit_basis ? `<span>Where that limit comes from</span><span class="mut">${esc(m.spread_limit_basis)}</span>` : ""}
     <span>Wider than usual?</span><span>${m.spread_pctile != null ? (m.spread_pctile > .9 ? "yes, unusually wide" : m.spread_pctile > .6 ? "a little" : "no, normal") : "–"}</span>
-    <span>How much it moves (ATR)</span><span>${n(m.atr_m15)}</span>
+    <span>${defn("ATR", "How much it moves (ATR)")}</span><span>${n(m.atr_m15)}</span>
     <span>Speed right now</span><span>${esc(say(m.volatility_state || "–"))}</span>
     <span>Trading session</span><span>${esc(String(m.session || "–").replace(/_/g, " ").toLowerCase())}</span>
-    <span>Market shape</span><span>${esc(say(m.regime || "–"))}</span>
+    <span>${defn("REGIME", "Market shape")}</span><span>${esc(say(m.regime || "–"))}</span>
     <span>News window</span><span>${esc(say(m.event_state || "–"))}</span>
     <span>Next big release</span><span>${m.next_event ? esc(tm(m.next_event.time).slice(0, 16) + " " + m.next_event.title) : "none scheduled"}</span>
     <span>Backtests on this symbol</span><span class="${m.research_block ? "bad" : "good"}">${m.research_block
@@ -568,6 +750,7 @@ async function loadToday() {
       return say(v);
     }]],
     "No trades have finished today yet.");
+  storyRows($("#today"), rows);
 }
 
 // ------------------------------------------------------------------ logs
@@ -605,10 +788,27 @@ const TAB_NAMES = {trades: "Trades", execution: "Orders sent", signals: "Signals
   rejected: "Trades not taken", candidate_evaluations: "Every chance it looked at",
   counterfactuals: "What skipped trades would have done", risk: "Risk changes", errors: "Problems",
   reconciliation: "Broker checks", health: "System checks", research: "Research runs", config: "Setting changes"};
+// One line per tab on what it holds and when it is worth opening, for someone who has never seen these records.
+const TAB_NOTES = {
+  trades: "Every trade the bot has tried to make, newest first — including ones cancelled before they filled. Click a finished one for its story.",
+  execution: "Every message to and from the broker: orders sent, fills, stop moves. Look here when a trade did something unexpected.",
+  signals: "Every time a rule's setup appeared on a chart, whether or not it became a trade.",
+  rejected: "Signals a safety, cost or risk check refused, and what each would have made or lost on paper afterwards.",
+  candidate_evaluations: "Every single chance a rule looked at and where it stopped — the raw data behind the funnel on the Overview.",
+  counterfactuals: "Refused signals followed on paper to their stop or target, so you can see whether refusing them was right.",
+  risk: "Each time the risk setting changed — for example sizes cut after the account fell from its best.",
+  errors: "Warnings and errors the bot logged. A few are normal; a burst of them is worth a look.",
+  reconciliation: "Checks that the bot's own record matches what the broker shows.",
+  health: "Connection, price-feed and database checks over time.",
+  research: "Backtest runs from the research lab and what each one found.",
+  config: "Every setting change: who made it, when, and the reason they gave.",
+};
 let TAB = "trades";
 async function loadLogs() {
   const rows = await (await fetch(`/api/logs/${TAB}?limit=${$("#limit").value}`)).json();
+  if ($("#tabnote")) $("#tabnote").textContent = TAB_NOTES[TAB] || "";
   table($("#logtable"), rows, LOG_COLS[TAB], "No records");
+  if (TAB === "trades") storyRows($("#logtable"), rows); else { $("#logtable").onclick = null; $("#logtable").onkeydown = null; }
   if (TAB === "rejected" || TAB === "counterfactuals") {
     const cf = await (await fetch("/api/counterfactuals/summary?days=" + $("#cfdays").value)).json();
     $("#cfsum").innerHTML = `Rejected: <b>${cf.rejected}</b> · would have won <b class="ok">${cf.would_have_won}</b> · lost <b class="bad">${cf.would_have_lost}</b> · open ${cf.still_open} · counterfactual <b class="${cls(cf.counterfactual_r)}">${signed(cf.counterfactual_r)} R</b> · most expensive gate <b>${cf.most_expensive_gate || "–"}</b> · most valuable gate <b>${cf.most_valuable_gate || "–"}</b>`;
@@ -691,7 +891,9 @@ async function loadIntegrity() {
   el.innerHTML = `<div class="kv">
     <span>Rules researched</span><span>${r.researched} of ${Object.keys(r.thresholds || {}).length}</span>
     <span>Rules that may refuse a trade</span><span>${(r.gated || []).length
-      ? esc((r.gated || []).join(", ")) : warn("none")}</span>
+      ? (r.gated || []).map(s => (r.gated_disabled || []).includes(s)
+          ? `${esc(s)} ${warn("(switched off - the gate has nothing to refuse)")}` : esc(s)).join(", ")
+      : warn("none")}</span>
     ${(r.record_only || []).length ? `<span>Researched, cannot refuse</span><span class="mut">${esc(r.record_only.join(", "))}</span>` : ""}
 
     <span>When research is missing or stale</span><span class="${r.require_evidence ? "good" : "wait"}">${
@@ -758,13 +960,18 @@ function initConfigActions() {
 }
 
 // ------------------------------------------------------------------ boot
-header();
-refresh(); setInterval(refresh, 1500); connectWS();
-if (PAGE === "overview") { loadOverviewSlow(); setInterval(loadOverviewSlow, 30000); window.addEventListener("resize", loadOverviewSlow); $("#eqh").onchange = loadOverviewSlow; }
-if (PAGE === "realtime") { loadToday(); setInterval(loadToday, 15000); fetch("/api/events?n=150").then(r => r.json()).then(es => es.forEach(pushFeed)); }
-if (PAGE === "logs") initLogs();
-if (PAGE === "analysis") initAnalysis();
-if (PAGE === "config") { initConfig(); initConfigActions(); loadIntegrity(); setInterval(loadIntegrity, 60000); }
+// Called by start() at the bottom of this file, once everything the page needs has loaded.
+function boot() {
+  header();
+  refresh(); setInterval(refresh, 1500); connectWS();
+  // The charts redraw themselves on resize, so a resize no longer refetches everything.
+  if (PAGE === "overview") { loadRiskCfg(); loadOverviewSlow(); setInterval(loadOverviewSlow, 30000);
+    $("#eqh").onchange = loadEquity; if ($("#eqkey")) $("#eqkey").onchange = loadEquity; }
+  if (PAGE === "realtime") { loadToday(); setInterval(loadToday, 15000); fetch("/api/events?n=150").then(r => r.json()).then(es => es.forEach(e => pushFeed(e))); }
+  if (PAGE === "logs") initLogs();
+  if (PAGE === "analysis") initAnalysis();
+  if (PAGE === "config") { initConfig(); initConfigActions(); loadIntegrity(); setInterval(loadIntegrity, 60000); }
+}
 
 
 // ------------------------------------------------------------------ analysis page: losses + blocked signals
@@ -793,7 +1000,8 @@ async function loadAnalysis() {
           .map(([k, v]) => `${esc(k)} ${n(v.loss, 2)} over ${v.trades}`).join(", ") || "none"}. `
       + `How they ended: ${Object.entries(ls.by_exit_reason || {})
           .map(([k, v]) => `${esc(say(k).toLowerCase())} ${v.trades}`).join(", ") || "not recorded"}.`;
-  table($("#ltable"), (L.rows || []).map(r => ({...r, setup: sigNotes(r.signal)})),
+  const lrows = (L.rows || []).map(r => ({...r, setup: sigNotes(r.signal)}));
+  table($("#ltable"), lrows,
     [["closed_at", "Closed", tm], ["symbol", "Symbol"], ["strategy", "Rule"],
      ["direction", "Side", v => String(v || "").toLowerCase()], ["net_pnl", "Lost", v => n(v, 2), () => "bad"],
      ["r_multiple", "vs. risked", v => v == null ? "–" : n(v, 2) + "R"],
@@ -802,6 +1010,7 @@ async function loadAnalysis() {
      ["mae_r", "Worst it got to", v => v == null ? "–" : n(v, 2) + "R"],
      ["bars_held", "Candles held"], ["setup", "What it saw when it entered"]],
     "No losing trades in this window. ");
+  storyRows($("#ltable"), lrows, r => r.r_multiple != null);
   const bs = B.summary || {};
   $("#bsum").innerHTML = !bs.blocked
     ? "Every signal in this window was taken — nothing was blocked."
@@ -834,7 +1043,140 @@ async function loadLab() {
       bt: e.backtrader && e.backtrader.n_trades != null ? `${f(e.backtrader, "n_trades", 0)} tr · ${f(e.backtrader, "expectancy_r", 2)}R` : (e.backtrader && e.backtrader.error ? "error" : "–"), note: e.note || "", live: live(s)})),
     [["symbol", "Symbol"], ["verdict", "Verdict", null, v => v === "ROBUST_ON_TEST" ? "ok" : (v === "NOT_ROBUST_ON_TEST" ? "bad" : "")], ["signals", "Signals"], ["best", "Best on train"], ["train", "Train"], ["test", "Test (unseen)"], ["bt", "Backtrader check"], ["live", "Live trading", null, v => /^BLOCKED/.test(v) ? "bad" : ""], ["note", "Note"]],
     "No research results yet - the lab starts ~2 minutes after the bot and repeats every 6 hours");
+  renderLabForest(d);
 }
+
+// ------------------------------------------------------------------ analysis page: the replay report
+// research/results/backtest/latest.json (tools/backtest_report.py, refreshed by the nightly lab run): every rule
+// over all the broker's history, pooled across symbols. Total, worst drawdown and worst month say "how bad"; the
+// unseen column is the only part that counts as evidence.
+let RP = null, RP_CHART = null, RP_PICK = null;
+const rMonth = m => m ? `${m[0]} (${signed(m[1], 1)}R)` : "–";
+const rRange = s => s && s.avg_r != null ? `${signed(s.avg_r, 3)}R` + (s.lo != null ? ` [${signed(s.lo, 2)}, ${signed(s.hi, 2)}]` : "") : "–";
+const rTone = s => !s || s.lo == null ? "" : (s.lo > 0 ? "ok" : (s.hi < 0 ? "bad" : ""));
+async function loadReplay() {
+  const el = $("#rpTable"); if (!el) return;
+  try { RP = await fetch("/api/backtest/latest").then(r => r.json()); } catch (e) { RP = null; }
+  const S = (RP && RP.strategies) || {};
+  if (!Object.keys(S).length) {
+    el.innerHTML = `<div class="empty">No replay yet. It is written by tools/backtest_report.py and refreshed after each nightly research run.</div>`;
+    $("#rpHead").innerHTML = ""; return;
+  }
+  const rows = Object.entries(S).map(([sid, v]) => ({sid, ...(v.pooled || {})}))
+    .sort((a, b) => (b.n ? 1 : 0) - (a.n ? 1 : 0) || (b.total_r ?? -1e9) - (a.total_r ?? -1e9));
+  const traded = rows.filter(r => r.n), up = traded.filter(r => r.total_r > 0), proven = traded.filter(r => r.lo > 0);
+  const risk = RP.risk_per_trade_money;
+  $("#rpHead").innerHTML = `Replayed ${esc(tm(RP.created_at))}. <b class="${up.length ? "good" : "bad"}">${up.length}</b> of ${traded.length} rules
+    finished above zero after costs, and <b class="${proven.length ? "good" : "bad"}">${proven.length}</b> did so with the whole
+    ${defn("RANGE95", "95% range")} above zero.` + (risk ? ` At ${n(risk, 0)} per trade, 1R = ${n(risk, 0)}.` : "");
+  table(el, rows,
+    [["sid", "Rule"], ["n", "Trades", v => v ? n(v, 0) : "none"], ["win_rate", "Won", v => pct(v, 0)],
+     ["avg_r", "Average per trade [95% range]", (v, r) => rRange(r), (v, r) => rTone(r)],
+     ["total_r", "Total", v => v == null ? "–" : signed(v, 1) + "R", v => v > 0 ? "ok" : (v < 0 ? "bad" : "")],
+     ["money", "In money", v => v ? signed(v.total, 0) : "–", (v) => v && v.total > 0 ? "ok" : (v && v.total < 0 ? "bad" : "")],
+     ["max_drawdown_r", "Worst drawdown", v => v == null ? "–" : n(v, 1) + "R"],
+     ["worst_losing_streak", "Worst losing run", v => v == null ? "–" : `${v} in a row`],
+     ["worst_month", "Worst month", v => rMonth(v)], ["best_month", "Best month", v => rMonth(v)],
+     ["losing_months", "Losing months", (v, r) => r.months ? `${v} of ${r.months}` : "–"],
+     ["unseen", "Unseen last 30%", v => v && v.n ? `${v.n} tr · ${rRange(v)}` : "–", v => rTone(v)]],
+    "No replay yet");
+  el.querySelectorAll("tbody tr").forEach((tr, i) => { if (rows[i].n) { tr.classList.add("click"); tr.tabIndex = 0; } });
+  el.onclick = e => { const tr = e.target.closest("tbody tr"); if (tr && tr.classList.contains("click")) replayDetail(rows[[...tr.parentNode.children].indexOf(tr)].sid); };
+  el.onkeydown = e => { if (e.key === "Enter") el.onclick(e); };
+  if (RP_PICK && S[RP_PICK]) replayDetail(RP_PICK);
+}
+function replayDetail(sid) {
+  const v = ((RP || {}).strategies || {})[sid]; if (!v) return;
+  RP_PICK = sid;
+  const p = v.pooled || {}, box = $("#rpDetail"); box.hidden = false;
+  $("#rpTitle").innerHTML = `<b>${esc(sid)}</b>: running total in R over ${n(p.n, 0)} trades on ${p.symbols_traded || 0} symbols,
+    from ${esc(tm(p.first).slice(0, 10))} to ${esc(tm(p.last).slice(0, 10))}. Best trade ${signed(p.best_trade_r, 1)}R, worst ${signed(p.worst_trade_r, 1)}R.`;
+  const pts = (p.curve || []).map(([t, r]) => ({t, equity: r}));
+  if (!RP_CHART) RP_CHART = VZ.lineChart($("#rpCurve"), {formatX: t => tm(t).slice(0, 10), formatY: v => signed(v, 1) + "R",
+    empty: "Too few trades to draw a line"});
+  RP_CHART.set({pts, key: "equity", markers: [], flags: []});
+  const syms = Object.entries(v.symbols || {}).map(([sym, s]) => ({sym, ...s}))
+    .sort((a, b) => (b.total_r ?? -1e9) - (a.total_r ?? -1e9));
+  table($("#rpSyms"), syms,
+    [["sym", "Symbol"], ["history_from", "History from"], ["n", "Trades", v => v ? n(v, 0) : "none"], ["win_rate", "Won", v => pct(v, 0)],
+     ["avg_r", "Average per trade [95% range]", (x, r) => rRange(r), (x, r) => rTone(r)],
+     ["total_r", "Total", x => x == null ? "–" : signed(x, 1) + "R", x => x > 0 ? "ok" : (x < 0 ? "bad" : "")],
+     ["max_drawdown_r", "Worst drawdown", x => x == null ? "–" : n(x, 1) + "R"],
+     ["worst_month", "Worst month", x => rMonth(x)],
+     ["unseen", "Unseen last 30%", x => x && x.n ? `${x.n} tr · ${rRange(x)}` : "–", x => rTone(x)],
+     ["grade", "Evidence", x => x ? say(x) : "–", x => x === "EDGE" ? "ok" : (x === "NEGATIVE" ? "bad" : "")]],
+    "No symbols");
+}
+
+// A long forest is shown a page at a time, strongest evidence first, with a button for the rest.
+const FOREST_ALL = {};
+function forestMore(el, rows, opts, first = 14) {
+  if (!el) return;
+  const all = FOREST_ALL[el.id], shown = all || rows.length <= first ? rows : rows.slice(0, first);
+  const axis = rows.flatMap(r => [r.lo, r.mid, r.hi]).filter(v => v != null && isFinite(v));
+  VZ.forest(el, shown, {...opts, min: Math.min(0, ...axis), max: Math.max(0, ...axis)});
+  if (rows.length > first) {
+    const b = document.createElement("button");
+    b.className = "btn small"; b.style.marginTop = "8px";
+    b.textContent = all ? "Show fewer" : `Show all ${rows.length}`;
+    b.onclick = () => { FOREST_ALL[el.id] = !all; forestMore(el, rows, opts, first); };
+    el.appendChild(b);
+  }
+}
+
+// Every backtest cell the lab graded, as a range on one axis: has any rule shown it makes money on history it
+// was not tuned on? The same stats objects the tables below print as text.
+const GRADE_CHIP = {EDGE: ["EDGE", "good"], NO_EDGE_SHOWN: ["no edge shown", "wait"], NEGATIVE: ["negative", "bad"], THIN: ["too few trades", "mut"]};
+// Graded cells (stats.lo / mean / hi plus a grade) get a full range. A result the lab has not graded yet - the
+// per-rule replay carries only its average, count and verdict - gets its dot alone: drawing a range without the
+// spread of the trades would invent one.
+function renderLabForest(d) {
+  const el = $("#labForest"); if (!el) return;
+  const latest = d.latest || {}, syms = latest.symbols || {}, rows = [];
+  const push = (label, sub, e) => {
+    const s = (e && e.stats) || {}; if (s.mean == null) return false;
+    const g = gradeOf(e), chip = GRADE_CHIP[g] || [String(g).toLowerCase(), "mut"];
+    rows.push({label, sub, lo: s.lo, mid: s.mean, hi: s.hi, chip: {text: chip[0], tone: chip[1]}, dim: g === "THIN", grade: g, graded: true});
+    return true;
+  };
+  const pushPlain = (label, sym, e) => {
+    const t = e && e.test; if (!t || !t.n_trades) return;
+    const few = t.n_trades < (e.min_trades_applied || 30);
+    const chip = few ? ["too few trades", "mut"] : e.verdict === "ROBUST_ON_TEST" ? ["held up on later data", "info"]
+      : e.verdict === "NOT_ROBUST_ON_TEST" ? ["did not hold up", "bad"] : [String(e.verdict || "–").toLowerCase().replace(/_/g, " "), "mut"];
+    rows.push({label, sub: `${sym} · ${t.n_trades} trades on the later stretch · won ${pct(t.win_rate, 0)}`, mid: t.expectancy_r,
+      chip: {text: chip[0], tone: chip[1]}, dim: few, grade: few ? "THIN" : e.verdict, graded: false,
+      tip: `${label} on ${sym}: ${signed(t.expectancy_r, 3)}R per trade over ${t.n_trades} trades of history after the split`
+        + `${few ? "\nToo few trades to read anything into." : ""}\n${e.note || ""}`});
+  };
+  for (const [sid, per] of Object.entries(latest.strategies || {})) {
+    for (const [sym, e] of Object.entries(per || {})) if (!push(sid, `${sym} · graded`, e)) pushPlain(sid, sym, e);
+  }
+  for (const [s, e] of Object.entries(syms)) {
+    for (const [rule, per] of Object.entries(e.hypotheses || {})) {
+      if (per && !per.error) for (const [tf, h] of Object.entries(per)) push(`${rule} (research only)`, `${s} · ${tf} candles`, h);
+    }
+    if (e.intraday_momentum) push("intraday_momentum (research only)", `${s} · M5`, e.intraday_momentum);
+    if (e.trend_daily) push("trend_daily_v1", `${s} · daily candles`, e.trend_daily);
+  }
+  const order = {EDGE: 0, ROBUST_ON_TEST: 1, NO_EDGE_SHOWN: 2, NOT_ROBUST_ON_TEST: 3, NEGATIVE: 3, THIN: 4};
+  rows.sort((a, b) => (order[a.grade] ?? 5) - (order[b.grade] ?? 5) || (b.mid ?? -9) - (a.mid ?? -9));
+  const graded = rows.filter(r => r.graded), edge = graded.filter(r => r.grade === "EDGE").length;
+  const head = $("#labHead");
+  if (head) head.innerHTML = !rows.length ? "" : !graded.length
+    ? `The lab has not graded these results yet — ranges and ${defn("GRADES", "evidence grades")} appear after its next research cycle.
+       Until then each dot is a rule's average per trade on the later stretch of history, and a grey row has too few trades to read.`
+    : edge ? `<b class="good">${edge}</b> of ${graded.length} graded combinations show an EDGE: the whole range above zero, better than random entries, and still standing after the penalty for trying many settings.`
+    : `None of the ${graded.length} graded combinations has shown an EDGE yet. That is a finding, not a fault: no rule has proved itself on unseen data so far.`;
+  forestMore(el, rows, {unit: "R", empty: "No backtest results yet — they appear after the next research cycle"});
+}
+// The lab's evidence grade: EDGE only when the 95% range is above zero, the deflated Sharpe (which counts every
+// cell looked at) clears 0.95, and the same entries taken with random sides did worse. See research/lab/stats.py.
+const gradeOf = e => (e && (e.evidence_grade || (e.stats || {}).grade)) || "–";
+const gradeCls = v => v === "EDGE" ? "ok" : (v === "NEGATIVE" ? "bad" : "");
+const evText = e => { const s = (e && e.stats) || {}; if (s.lo == null) return "–";
+  return `${n(s.mean, 3)}R [${n(s.lo, 2)}, ${n(s.hi, 2)}]` + (s.dsr != null ? ` · DSR ${n(s.dsr, 2)}` : "")
+    + (s.random_p != null ? ` · vs random p ${n(s.random_p, 3)}` : "") + (s.pbo != null ? ` · PBO ${n(s.pbo, 2)}` : ""); };
 function renderTimeframes(d) {
   const syms = ((d.latest || {}).symbols) || {};
   const r2 = (m, k) => m && m[k] != null ? n(m[k], 2) : "–";
@@ -843,7 +1185,8 @@ function renderTimeframes(d) {
     const c = e.costs || {};
     for (const [tf, t] of Object.entries(e.timeframes || {})) {
       const o = t.optuna || {}, wf = o.walk_forward || {}, pp = o.params_on_all_data || {};
-      rows.push({symbol: s, tf, verdict: t.verdict, signals: t.signals,
+      rows.push({symbol: s, tf, verdict: t.verdict, signals: t.signals, grade: gradeOf(tf === "M1" ? e : t),
+        evidence: evText(tf === "M1" ? e : t),
         test: t.test ? `${t.test.n_trades ?? "–"} tr · ${r2(t.test, "expectancy_r")}R` : "–",
         wf: o.error ? `error: ${o.error}` : (wf.n_trades != null ? `${wf.n_trades} tr · ${r2(wf, "expectancy_r")}R · PF ${r2(wf, "profit_factor")}` : "–"),
         wfv: o.verdict || "", params: pp.sl_atr != null ? `SL ${pp.sl_atr}×ATR · RR ${pp.rr} · vol ≥ ${pp.min_rv}` : "–",
@@ -852,6 +1195,7 @@ function renderTimeframes(d) {
     }
   }
   table($("#tftable"), rows, [["symbol", "Symbol"], ["tf", "Trigger"], ["verdict", "Grid verdict", null, v => v === "ROBUST_ON_TEST" ? "ok" : (v === "NOT_ROBUST_ON_TEST" ? "bad" : "")],
+    ["grade", "Evidence", null, gradeCls], ["evidence", "Unseen R per trade [95% range]"],
     ["signals", "Signals"], ["test", "Test (unseen)"], ["wf", "Walk-forward (out of sample)"], ["wfv", "WF verdict", null, v => v === "WALK_FORWARD_POSITIVE" ? "ok" : (v ? "bad" : "")],
     ["params", "Optuna params (all data)"], ["cost", "Median spread"], ["comm", "Commission (price)"]],
     "No timeframe results yet - they appear after the next research cycle");
@@ -883,7 +1227,7 @@ function renderTimeframes(d) {
       if (per && per.error) { hrows.push({symbol: s, rule, tf: "–", verdict: "ERROR", note: per.error}); continue; }
       for (const [tf, h] of Object.entries(per || {})) {
         const o = h.optuna || {}, wf = o.walk_forward || {};
-        hrows.push({symbol: s, rule, tf, verdict: h.verdict, signals: h.signals,
+        hrows.push({symbol: s, rule, tf, verdict: h.verdict, signals: h.signals, grade: gradeOf(h), evidence: evText(h),
           best: h.best ? `SL ${h.best.sl_atr}×ATR · RR ${h.best.rr}` : "–",
           test: h.test ? `${h.test.n_trades ?? "–"} tr · ${r2(h.test, "expectancy_r")}R · PF ${r2(h.test, "profit_factor")}` : "–",
           wf: wf.n_trades != null ? `${wf.n_trades} tr · ${r2(wf, "expectancy_r")}R · PF ${r2(wf, "profit_factor")}` : (o.error ? "error" : "not run"),
@@ -891,9 +1235,23 @@ function renderTimeframes(d) {
       }
     }
   }
-  hrows.sort((a, b) => (a.wfv === "WALK_FORWARD_POSITIVE" ? 0 : 1) - (b.wfv === "WALK_FORWARD_POSITIVE" ? 0 : 1));
+  for (const [s, e] of Object.entries(syms)) {      // the two rules from the published evidence, scored by their own paths
+    const im = e.intraday_momentum;
+    if (im) hrows.push({symbol: s, rule: "intraday_momentum", tf: "M5", verdict: im.verdict, signals: im.signals,
+      grade: gradeOf(im), evidence: evText(im), best: "2×ATR stop · exit at NY close",
+      test: im.test ? `${im.test.n_trades ?? "–"} tr · ${r2(im.test, "expectancy_r")}R` : "–", wf: "no search", wfv: "", note: ""});
+    const td = e.trend_daily;
+    if (td) hrows.push({symbol: s, rule: "trend_daily", tf: "D1", verdict: td.verdict, signals: (td.metrics || {}).n_trades,
+      grade: (td.stats || {}).grade || "–", evidence: evText(td), best: "Clenow 50-day breakout · 3×ATR(100) trail",
+      test: `${(td.metrics || {}).n_trades ?? 0} tr over ${td.days ?? "–"} days · swap ${n(td.avg_swap_r, 2)}R/trade`,
+      wf: td.halves ? `halves ${td.halves.map(x => n(x, 2)).join(" / ")}` : "–", wfv: "",
+      note: td.exits ? `with the profit lock: ${n(td.exits.with_profit_lock, 3)}R vs ${n(td.exits.trail_only, 3)}R` : ""});
+  }
+  const rank = r => r.grade === "EDGE" ? 0 : (r.wfv === "WALK_FORWARD_POSITIVE" ? 1 : 2);
+  hrows.sort((a, b) => rank(a) - rank(b));
   table($("#htable"), hrows, [["symbol", "Symbol"], ["rule", "Candidate rule"], ["tf", "Timeframe"],
     ["verdict", "Grid verdict", null, v => v === "ROBUST_ON_TEST" ? "ok" : (v === "NOT_ROBUST_ON_TEST" ? "bad" : "")],
+    ["grade", "Evidence", null, gradeCls], ["evidence", "Unseen R per trade [95% range]"],
     ["signals", "Signals"], ["best", "Best on train"], ["test", "Test (unseen)"], ["wf", "Walk-forward"],
     ["wfv", "WF verdict", null, v => v === "WALK_FORWARD_POSITIVE" ? "ok" : (v ? "bad" : "")], ["note", "Note"]],
     "No candidate-rule results yet - they appear after the next research cycle");
@@ -958,6 +1316,11 @@ async function loadSessions() {
 
   $("#sessverdict").innerHTML = esc(d.verdict || "");
   const pretty = v => String(v || "").replace(/_/g, " ").toLowerCase();
+  VZ.barChart($("#sessbars"), (d.sessions || []).map(x => ({label: pretty(x.session), value: x.mean_r, dim: !x.trustworthy,
+      sub: `${x.n} trade${x.n === 1 ? "" : "s"}${x.trustworthy ? "" : " · not enough yet"}`,
+      tip: `${pretty(x.session)}: ${signed(x.mean_r, 3)}R per trade over ${x.n} trades\n${signed(x.total_r, 2)}R in total · won ${pct(x.win_rate, 0)}`
+        + `${x.trustworthy ? "" : "\nToo few trades for this number to mean anything yet."}`})),
+    {fmt: v => signed(v, 3) + "R", empty: "No finished trades in this window."});
   table(box, (d.sessions || []).map(x => ({...x, judged: x.trustworthy})),
     [["session", "Session", pretty],
      ["n", "Trades"],
@@ -985,6 +1348,21 @@ async function loadSessions() {
 async function loadScoreboard() {
   const d = await fetch("/api/analysis/scoreboard?hours=720").then(r => r.json()).catch(() => ({}));
   const f = (m, k, nd) => m && m[k] != null ? n(m[k], nd) : "–";
+  // one card per rule: what it actually did with money, and what its refused or watch-only signals did on paper
+  const cards = $("#ruleCards");
+  if (cards) {
+    const side = (m, what) => !m || !m.n ? `<div class="rc-none mut">${what}: none yet</div>`
+      : `<div class="rc-s"><span>${what}</span><b class="${cls(m.mean_r)}">${signed(m.mean_r, 3)}R</b><span class="mut">per trade · ${m.n} · won ${pct(m.win_rate, 0)}</span>
+          <i class="rc-bar"><i class="${(m.mean_r || 0) >= 0 ? "good" : "bad"}" style="width:${Math.min(100, Math.abs(m.mean_r || 0) * 100)}%"></i></i></div>`;
+    cards.innerHTML = (d.rows || []).length ? (d.rows || []).map(r => {
+      // only a rule with enough results gets the seafoam chip; "too few" and "no signals yet" stay grey
+      const enough = r.evidence && !/few|no /i.test(r.evidence);
+      return `<div class="rcard"><div class="rc-h"><b>${esc(r.strategy)}</b>
+          <span class="chip ${enough ? "good" : "mut"}">${r.evidence === "too few" ? "too few to judge" : esc(r.evidence || "–")}</span></div>
+        <div class="rc-st mut">cleared for ${r.status === "DEMO" ? "the practice account" : esc(String(r.status || "").toLowerCase())}</div>
+        ${side(r.live, "Real trades")}${side(r.shadow, `${defn("PAPER", "On paper")}`)}</div>`;
+    }).join("") : `<div class="empty">Nothing to score yet. Rules appear here once they have produced signals.</div>`;
+  }
   table($("#stable"), (d.rows || []).map(r => ({
       strategy: r.strategy, status: r.status, evidence: r.evidence,
       live: r.live.n ? `${r.live.n} tr · ${f(r.live, "mean_r", 3)}R · ${pct(r.live.win_rate, 0)} won · ${f(r.live, "total_r", 1)}R total` : "–",
@@ -993,6 +1371,47 @@ async function loadScoreboard() {
      ["evidence", "Enough data?", v => v === "too few" ? "not yet" : v, v => v === "too few" ? "mut" : "good"],
      ["live", "Trades it actually took"], ["shadow", "Signals followed on paper"]],
     "Nothing to score yet. Rules appear here once they have produced signals.");
+}
+async function loadSelector() {
+  if (!$("#seltable")) return;
+  const d = await fetch("/api/selector").then(r => r.json()).catch(() => ({}));
+  const rows = [], tally = {};
+  for (const [sym, s] of Object.entries(d.symbols || {})) {
+    for (const a of Object.values(s.allocations || {})) {
+      tally[a.state] = (tally[a.state] || 0) + 1;
+      const c = a.counts || {};
+      rows.push({symbol: sym, strategy: a.strategy_id, state: a.state, size: a.multiplier,
+        est: a.posterior_r, range: `${signed(a.lower_r, 3)} to ${signed(a.upper_r, 3)}R`,
+        evidence: `${n(a.n_eff, 0)} (live ${c.live || 0} · paper ${c.shadow || 0} · backtest ${(c.lab_test || 0) + (c.lab_train || 0)})`,
+        veto: (a.vetoed_regimes || []).join(", "), reason: a.reason, at: s.computed_at,
+        lo: a.lower_r, hi: a.upper_r, n_eff: a.n_eff});
+    }
+  }
+  const order = {ACTIVE: 0, PROBATION: 1, UNPROVEN: 2, BENCHED: 3};
+  rows.sort((x, y) => (order[x.state] ?? 9) - (order[y.state] ?? 9) || (y.est || 0) - (x.est || 0));
+  const STATE_CHIP = {ACTIVE: "good", PROBATION: "wait", UNPROVEN: "mut", BENCHED: "bad"};
+  forestMore($("#selForest"), rows.map(r => ({label: r.strategy, sub: `${r.symbol} · ${n(r.n_eff, 0)} evidence trades · trades at ${pct(r.size, 0)} size`,
+      lo: r.lo, mid: r.est, hi: r.hi, chip: {text: String(r.state || "").toLowerCase(), tone: STATE_CHIP[r.state] || "mut"},
+      tip: `${r.strategy} on ${r.symbol} — ${String(r.state || "").toLowerCase()}, trading at ${pct(r.size, 0)} of normal size\n`
+        + `best guess ${signed(r.est, 3)}R per trade after costs, likely between ${signed(r.lo, 3)} and ${signed(r.hi, 3)}R\n${r.reason || ""}`})),
+    {unit: "R", empty: "Not scored yet - the selector runs within a minute of start-up and then every hour"});
+  const mode = d.mode || "off";
+  $("#selsum").innerHTML = `Mode: <b>${esc(mode)}</b>${mode === "auto" ? " — sizes below are applied to new trades."
+      : mode === "shadow" ? " — computed and recorded only; trading is unchanged." : " — the selector is switched off."} `
+    + (rows.length ? Object.keys(order).filter(k => tally[k]).map(k => `${esc(k.toLowerCase())} ${tally[k]}`).join(", ") + "." : "");
+  table($("#seltable"), rows,
+    [["symbol", "Symbol"], ["strategy", "Rule"],
+     ["state", "State", null, v => v === "ACTIVE" ? "ok" : (v === "BENCHED" ? "bad" : (v === "PROBATION" ? "wait" : "mut"))],
+     ["size", "Size vs normal", v => v == null ? "–" : pct(v, 0)],
+     ["est", "Estimate per trade", v => v == null ? "–" : signed(v, 3) + "R", v => v > 0 ? "good" : (v < 0 ? "bad" : "")],
+     ["range", "Likely range"], ["evidence", "Evidence (trades)"],
+     ["veto", "Benched in regime", v => v || "–", v => v ? "bad" : ""], ["reason", "Why"], ["at", "Scored", v => v ? tm(v) : "–"]],
+    "Not scored yet - the selector runs within a minute of start-up and then every hour");
+  table($("#selhist"), d.history || [],
+    [["created_at", "When", tm], ["symbol", "Symbol"], ["strategy_id", "Rule"],
+     ["previous_state", "From", v => v || "new"], ["state", "To"], ["multiplier", "Size", v => pct(v, 0)],
+     ["applied", "Applied", v => v ? "yes" : "shadow"], ["reason", "Why"]],
+    "No changes recorded yet.");
 }
 // ------------------------------------------------------------------ the book as a whole
 // Deliberately separate from the per-rule scoreboard. A rule's own win rate cannot show whether it
@@ -1004,14 +1423,26 @@ async function loadPortfolio() {
   let d;
   try { d = await (await fetch(`/api/analysis/portfolio?hours=${hours}&bucket=${bucket}`)).json(); }
   catch (e) { head.innerHTML = `<div class="empty">Could not load: ${esc(e.message)}</div>`; return; }
+  const range = $("#pfrange");
   if (!d || !d.n_trades) {
     head.innerHTML = `<div class="empty">${esc((d && d.note) || "No closed trades in this period")}</div>`;
+    if (range) range.innerHTML = "";
     $("#pfco").innerHTML = ""; table($("#pftable"), [], []); return;
   }
   const dd = d.drawdown || {}, ci = d.ci95;
   // An interval straddling zero is the single most important thing on this page: it means the book
   // has not been shown to make money, however good the headline looks.
   const unproven = ci && ci[0] < 0 && ci[1] > 0;
+  if (range) {
+    VZ.forest(range, [{label: "The whole book, per trade", sub: `${d.n_trades} finished trade${d.n_trades === 1 ? "" : "s"}`,
+      lo: ci ? ci[0] : null, mid: d.mean_r, hi: ci ? ci[1] : null, dim: d.n_trades < 30}],
+      {big: true, min: Math.min(-1, ci ? ci[0] : d.mean_r), max: Math.max(1, ci ? ci[1] : d.mean_r)});
+    range.insertAdjacentHTML("beforeend", `<div class="note">${d.n_trades < 30
+      ? `Only <b>${d.n_trades}</b> trade${d.n_trades === 1 ? "" : "s"} so far — about thirty are needed before the ${defn("RANGE95", "range")} means much. Judge nothing yet.`
+      : !ci ? "" : ci[0] > 0 ? `<b class="good">The whole range is above zero</b> — the book has been shown to make money after costs.`
+      : ci[1] < 0 ? `<b class="bad">The whole range is below zero</b> — the book has been shown to lose money after costs.`
+      : `<b class="wait">The range crosses zero</b> — not shown to make money yet, however good the headline looks.`}</div>`);
+  }
   head.innerHTML = `<div class="kv">
     <span>Total net R</span><span class="${d.total_net_r > 0 ? "good" : "bad"}"><b>${n(d.total_net_r, 2)}R</b> over ${d.n_trades} trades</span>
     <span>Per trade</span><span>${n(d.mean_r, 4)}R${ci ? ` &nbsp;<span class="mut">95% [${n(ci[0], 3)}, ${n(ci[1], 3)}]</span>` : ""}</span>
@@ -1051,7 +1482,7 @@ function initAnalysis() {
   if ($("#pfhours")) $("#pfhours").onchange = loadPortfolio;
   if ($("#pfbucket")) $("#pfbucket").onchange = loadPortfolio;
   loadPortfolio(); setInterval(loadPortfolio, 60000);
-  loadScoreboard(); setInterval(loadScoreboard, 60000); loadLab(); setInterval(loadLab, 60000); $("#areload").onclick = loadAnalysis; loadAnalysis(); setInterval(loadAnalysis, 30000); }
+  loadScoreboard(); setInterval(loadScoreboard, 60000); loadSelector(); setInterval(loadSelector, 60000); loadLab(); setInterval(loadLab, 60000); loadReplay(); setInterval(loadReplay, 600000); $("#areload").onclick = loadAnalysis; loadAnalysis(); setInterval(loadAnalysis, 30000); }
 
 /* ------------------------------------------------------------------ install as an app
  * Registering this makes the browser offer "Install app" / "Add to Home screen",
@@ -1064,8 +1495,55 @@ function initAnalysis() {
  */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
-    navigator.serviceWorker.register("/sw.js").catch(function (err) {
+    // update() asks for a newer sw.js straight away rather than at the browser's convenience, so a fix to the
+    // worker (such as always re-checking pages with the server) reaches every browser on its next page load
+    navigator.serviceWorker.register("/sw.js").then(function (reg) { return reg.update(); }).catch(function (err) {
       console.debug("service worker not registered:", err && err.message);
     });
   });
 }
+
+/* ------------------------------------------------------------------ start
+ * A page the browser saved before 20 Oct 2026 still loads this script, but not the files the header and the charts
+ * now need (viz.js, help.js, learn.js, the new glossary.js and the new stylesheet). On that page the header threw
+ * "HELP is not defined" and the Live page stayed empty. So a page first checks it is current. If it is not, it
+ * reloads once, which makes the browser ask the server for the page again. If something is still missing after
+ * that, it fetches the missing files itself and starts anyway. A flag in sessionStorage stops a reload loop.
+ */
+const ASSET_V = (() => { try { return new URL(document.currentScript.src).searchParams.get("v"); } catch (_) { return null; } })();
+(function start() {
+  const KEY = "qa_stale_reload";
+  const current = typeof VZ !== "undefined" && typeof HELP !== "undefined" && typeof LEARN !== "undefined"
+    && typeof funnelModel !== "undefined" && typeof TERMS !== "undefined";
+  const styled = !!document.querySelector('link[rel="stylesheet"][href*="style.css?v="]');
+  if (current && styled) {
+    try { sessionStorage.removeItem(KEY); } catch (_) {}
+    boot(); return;
+  }
+  let reload = false;
+  try { if (!sessionStorage.getItem(KEY)) { sessionStorage.setItem(KEY, String(Date.now())); reload = true; } } catch (_) {}
+  if (reload) { location.reload(); return; }
+  // Still an old page. Fetch what is missing and start. (An old glossary.js cannot be swapped in place - its names
+  // are already taken - so the few things that need the new one check for it and say "reload the page" instead.)
+  const v = encodeURIComponent(ASSET_V || String(Date.now()));
+  if (!styled) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet"; link.href = `/static/style.css?v=${v}`; document.head.appendChild(link);
+  }
+  const load = name => new Promise(done => {
+    const s = document.createElement("script");
+    s.src = `/static/${name}?v=${v}`; s.onload = done; s.onerror = done; document.body.appendChild(s);
+  });
+  const missing = [];
+  if (typeof VZ === "undefined") missing.push("viz.js");
+  if (typeof HELP === "undefined") missing.push("help.js");
+  if (typeof LEARN === "undefined") missing.push("learn.js");
+  missing.reduce((p, name) => p.then(() => load(name)), Promise.resolve()).then(() => {
+    if (typeof VZ === "undefined" || typeof HELP === "undefined") {
+      document.body.insertAdjacentHTML("afterbegin", `<div class="banner show halt" style="margin:12px">This page is an
+        old saved copy and could not update itself. Press Ctrl+F5 (or Cmd+Shift+R) to load the current version.</div>`);
+      return;
+    }
+    boot();
+  });
+})();

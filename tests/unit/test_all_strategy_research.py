@@ -161,7 +161,7 @@ class TestNoParameterSearch(unittest.TestCase):
 
     def test_the_module_never_imports_a_tuner(self):
         import pathlib
-        src = pathlib.Path("app/research/lab/strategy_research.py").read_text()
+        src = pathlib.Path("app/research/lab/strategy_research.py").read_text(encoding="utf-8")
         for banned in ("optuna", "run_sweep", "vbt_sweep", "walk_forward"):
             self.assertNotIn(banned, src,
                              f"{banned} would turn the veto into a selector across 104 cells")

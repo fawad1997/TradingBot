@@ -96,8 +96,12 @@ def _verdict(train_m: dict, test_m: dict, min_trades: int) -> str:
 
 def research_one(scfg, m15, h1, settings: BTSettings, spec=None, sessions_cfg=None, calendar=None,
                  m1=None, train_fraction: float = 0.7, min_trades: int = DEFAULT_MIN_TRADES,
-                 embargo_seconds: int = DEFAULT_EMBARGO_SECONDS) -> dict:
-    """One strategy on one symbol, at its live settings. Returns an entry `lab/gate.py` can evaluate."""
+                 embargo_seconds: int = DEFAULT_EMBARGO_SECONDS, evidence: bool = False,
+                 keep_trades: bool = False) -> dict:
+    """One strategy on one symbol, at its live settings. Returns an entry `lab/gate.py` can evaluate.
+
+    With `evidence`, a `stats` block judges the unseen trades as they were traded (settings.execution_exits puts
+    breakeven and the profit lock in) against the same entries with random sides and with a plain bracket."""
     if m15 is None or len(m15) < 100:
         return {"verdict": "INSUFFICIENT_DATA", "note": f"{0 if m15 is None else len(m15)} M15 bars",
                 "strategy_id": scfg.id}
@@ -127,10 +131,31 @@ def research_one(scfg, m15, h1, settings: BTSettings, spec=None, sessions_cfg=No
         # The bar THIS strategy was judged against, and the dispersion behind its numbers. Both are
         # needed to set a sensible per-strategy threshold later instead of reusing a global constant.
         "min_trades_applied": min_trades,
-        "r_sd": round(train_m.get("sd") or 0.0, 4) or None,
+        # trade_metrics had no "sd" key, so this was always None and the selector fell back to default_sd_r
+        "r_sd": round(train_m.get("sd_r") or 0.0, 4) or None,
         "trades_per_1000_bars": round(1000.0 * len(res.trades) / max(1, len(m15)), 2),
         "note": "live parameters, no sweep - out-of-time consistency check, not out-of-sample validation",
+        **({"stats": _evidence(parts["test"], m15, split_time, settings, spec)} if evidence else {}),
+        # Every trade, compact, for the replay report (app/research/lab/replay.py). Popped before the lab stores.
+        **({"trades": _compact_trades(res.trades)} if keep_trades else {}),
     }
+
+
+def _compact_trades(trades) -> list:
+    from app.research.lab.replay import compact
+    return compact(trades, "")
+
+
+def _evidence(trades, m15, split_time: int, settings: BTSettings, spec) -> Optional[dict]:
+    try:
+        import numpy as np
+        from app.research.lab.evidence import strategy_stats
+        point = float(getattr(spec, "point", 0.0) or 0.0)
+        spread = (np.asarray(m15.spread, float) * settings.spread_mult + settings.extra_spread_points) * point
+        return strategy_stats(trades, m15, split_time, spread, 0.0)        # the purged unseen window
+    except Exception:                                                   # noqa: BLE001
+        log.exception("per-strategy evidence failed")
+        return None
 
 
 def min_trades_for(lab_cfg, strategy_id: str, default: int = DEFAULT_MIN_TRADES) -> int:
@@ -149,7 +174,7 @@ def min_trades_for(lab_cfg, strategy_id: str, default: int = DEFAULT_MIN_TRADES)
 def research_all(cfgm, m15, h1, settings: BTSettings, spec=None, sessions_cfg=None, calendar=None,
                  m1=None, strategy_ids: Optional[Sequence[str]] = None,
                  train_fraction: float = 0.7, min_trades: int = DEFAULT_MIN_TRADES,
-                 lab_cfg=None) -> Dict[str, dict]:
+                 lab_cfg=None, keep_trades: bool = False) -> Dict[str, dict]:
     """Every configured strategy on one symbol, each judged against ITS OWN evidence bar.
 
     A strategy that raises is recorded, not allowed to stop the rest."""
@@ -161,7 +186,9 @@ def research_all(cfgm, m15, h1, settings: BTSettings, spec=None, sessions_cfg=No
             n = min_trades_for(lab_cfg, scfg.id, min_trades) if lab_cfg is not None else min_trades
             out[scfg.id] = research_one(scfg, m15, h1, settings, spec=spec, sessions_cfg=sessions_cfg,
                                         calendar=calendar, m1=m1, train_fraction=train_fraction,
-                                        min_trades=n)
+                                        min_trades=n,
+                                        evidence=bool(getattr(lab_cfg, "evidence_enabled", False)),
+                                        keep_trades=keep_trades)
         except Exception as exc:                                      # noqa: BLE001
             log.exception("per-strategy research failed for %s", scfg.id)
             out[scfg.id] = {"strategy_id": scfg.id, "verdict": "ERROR", "note": str(exc)}

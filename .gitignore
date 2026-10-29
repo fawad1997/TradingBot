@@ -23,6 +23,7 @@ research/reports/*
 !research/reports/.gitkeep
 research/results/
 research/lab_data/
+backups/
 research/experiments/*
 !research/experiments/.gitkeep
 *.pkl

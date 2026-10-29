@@ -1,17 +1,85 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Analysis · Quantara</title><link rel="icon" type="image/png" href="/static/favicon.png">
-<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25">
+<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25"><meta name="color-scheme" content="dark">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css"></head>
+<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css?v=20261029.0038"></head>
 <body data-page="analysis"><header id="hdr"></header>
 <main>
   <div id="banner" class="banner"></div>
 
-  <div class="card"><h3>Where the money went</h3>
+  <div class="card readme">
+    <b>How to read this page.</b> Every result is in <abbr class="term" data-term="R" tabindex="0">R</abbr> — what a
+    trade put at risk. Judge a rule by its <abbr class="term" data-term="EXPECTANCY" tabindex="0">average per trade</abbr>
+    and its <abbr class="term" data-term="RANGE95" tabindex="0">95% range</abbr>, never by its win rate. In the range
+    charts the dot is the best guess and the bar is where the truth probably lies: a bar wholly right of zero has been
+    shown to make money, a bar across zero could still be luck.
+  </div>
+
+  <div class="card section"><h3>Is the whole book making money?</h3>
+    <p class="lede">The strategies judged together rather than one at a time. A rule that wins 70% of the
+      time but loses on exactly the days everything else loses is worth less than one that wins when the
+      rest are down — and no per-rule table can show that.</p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="mut">Showing</span>
+      <select id="pfhours"><option value="168">last 7 days</option><option value="720" selected>last 30 days</option><option value="2160">last 90 days</option><option value="8760">last year</option></select>
+      <span class="mut">Group losses by</span>
+      <select id="pfbucket"><option value="D" selected>day</option><option value="W">week</option></select>
+    </div>
+    <div id="pfrange" class="section-viz"></div>
+    <div id="pfhead"></div>
+    <div id="pfco" class="note" style="font-size:13px;margin:12px 0 10px"></div>
+    <details class="tech inner"><summary>Each rule's effect on the book <small>— would the book be better without it?</small></summary>
+      <div class="body"><div id="pftable" class="scroll"></div>
+        <div class="note">“Cushions drawdown” means removing that rule would make the worst losing stretch
+          <em>deeper</em> — it was winning while the others lost. A rule can lose money overall and still be
+          worth keeping for that reason, which is the whole point of looking at the book instead of the parts.</div></div></details>
+  </div>
+
+  <div class="card section"><h3>Which rule is actually working</h3>
+    <p class="lede">Every trading <abbr class="term" data-term="RULE" tabindex="0">rule</abbr> over the last 30 days. Rules in
+      watch-only mode place no orders, so they are judged on signals followed to their stop or target
+      <abbr class="term" data-term="PAPER" tabindex="0">on paper</abbr>. Fewer than about thirty results means a number here is noise, not evidence.</p>
+    <div id="ruleCards" class="rcards"></div>
+    <details class="tech inner"><summary>Show the numbers</summary><div class="body"><div id="stable" class="scroll"></div></div></details></div>
+
+  <div class="card section"><h3>How much each rule is allowed to trade</h3>
+    <p class="lede">The <abbr class="term" data-term="SELECTOR" tabindex="0">strategy selector</abbr> re-scores every rule on every
+      symbol from its own record after costs — real trades count fully, paper-followed signals and backtests count half.
+      A rule with no record trades small, a confidently profitable one at full size, and one that loses is benched:
+      it keeps being followed on paper so it can earn its way back, but places no orders.</p>
+    <div id="selsum" class="note" style="font-size:13px;margin:0 0 10px"></div>
+    <div id="selForest" class="section-viz"></div>
+    <details class="tech inner"><summary>Show the numbers</summary>
+      <div class="body"><div id="seltable" class="scroll" style="max-height:55vh"></div></div></details>
+    <details class="tech inner"><summary>Recent changes</summary>
+      <div class="body"><div id="selhist" class="scroll" style="max-height:35vh"></div></div></details>
+  </div>
+
+  <div class="card section"><h3>Does it work better at some hours than others?</h3>
+    <p class="lede">Every finished trade grouped by <abbr class="term" data-term="SESSION" tabindex="0">trading session</abbr>.
+      This is the one question worth asking of live results that does not require a new rule — it filters the rules
+      you already have. A session needs about thirty trades before its number means anything; grey bars are shown but not judged.</p>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="mut">Showing</span>
+      <select id="sesshours"><option value="168">last 7 days</option><option value="720" selected>last 30 days</option><option value="2160">last 90 days</option><option value="8760">last year</option></select>
+      <span class="mut">Symbol</span><select id="sesssym"><option value="">all symbols</option></select>
+      <label class="inline" id="sessexclwrap" hidden><input type="checkbox" id="sessexcl" checked>
+        <span id="sessexcllbl">leave out rules that are switched off</span></label>
+    </div>
+    <div class="note" id="sessexclnote" style="font-size:13px;margin:0 0 10px" hidden></div>
+    <div id="sessverdict" class="note" style="font-size:13.5px;margin:0 0 12px"></div>
+    <div id="sessbars" class="section-viz"></div>
+    <details class="tech inner"><summary>Show the numbers</summary><div class="body"><div id="sesstable" class="scroll"></div></div></details>
+    <details class="tech inner"><summary>By hour of day <small>— a finer grain, needs far more trades to mean anything</small></summary>
+      <div class="body"><div id="hourtable" class="scroll"></div></div></details>
+  </div>
+
+  <div class="card section"><h3>Where the money went</h3>
     <p class="lede">Every losing trade, what the bot saw before it took it, and how far it went the right way
-      before it turned. If a trade was well ahead before it lost, that is a sign the exit is the problem.</p>
+      before it turned. If a trade was well ahead before it lost, that is a sign the exit is the problem.
+      Click a row for the story of that trade.</p>
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
       <span class="mut">Showing</span>
       <select id="lhours"><option value="24">today</option><option value="168" selected>last 7 days</option><option value="720">last 30 days</option></select>
@@ -19,7 +87,7 @@
     <div id="lsum" class="note" style="font-size:13px;margin:0 0 10px"></div>
     <div id="ltable" class="scroll" style="max-height:45vh"></div></div>
 
-  <div class="card"><h3>Trades it decided not to take</h3>
+  <div class="card section"><h3>Trades it decided not to take</h3>
     <p class="lede">Signals that looked fine on the chart but were stopped by a safety, cost or risk check.
       Tick the box to see only the ones the bot itself calculated as worth taking — those are the ones where
       a rule may be costing you money rather than saving it.</p>
@@ -30,49 +98,37 @@
     <div id="bsum" class="note" style="font-size:13px;margin:0 0 10px"></div>
     <div id="btable" class="scroll" style="max-height:55vh"></div></div>
 
-  <div class="card"><h3>Does it work better at some hours than others?</h3>
-    <p class="lede">Every finished trade grouped by trading session. This is the one question worth asking of
-      live results that does not require a new rule — it filters the rules you already have. A session needs
-      about thirty trades before its number means anything, and sessions below that are shown but not judged.</p>
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-      <span class="mut">Showing</span>
-      <select id="sesshours"><option value="168">last 7 days</option><option value="720" selected>last 30 days</option><option value="2160">last 90 days</option><option value="8760">last year</option></select>
-      <span class="mut">Symbol</span><select id="sesssym"><option value="">all symbols</option></select>
-      <label class="inline" id="sessexclwrap" hidden><input type="checkbox" id="sessexcl" checked>
-        <span id="sessexcllbl">leave out rules that are switched off</span></label>
+  <div class="card section" id="replayCard"><h3>Every rule replayed over the last two years: how good, how bad</h3>
+    <p class="lede">Each rule's own code <abbr class="term" data-term="BACKTEST" tabindex="0">replayed</abbr> over all the price
+      history the broker gives (about two years; less for the stock CFDs), charged real spreads, slippage, commission and
+      overnight swap, and managed with the same exits as live trades. All symbols are pooled together. Read the total and
+      the worst <abbr class="term" data-term="DRAWDOWN_R" tabindex="0">drawdown</abbr> before the win rate. The last column is the
+      <abbr class="term" data-term="UNSEEN" tabindex="0">unseen</abbr> last 30% on its own, which is the part that counts as
+      evidence. Click a rule to see its account curve and each symbol.</p>
+    <div id="rpHead" class="note" style="font-size:13.5px;margin:0 0 10px"></div>
+    <div id="rpTable" class="scroll"></div>
+    <div id="rpDetail" hidden style="margin-top:14px">
+      <div id="rpTitle" class="note" style="font-size:13.5px;margin:0 0 6px"></div>
+      <canvas id="rpCurve"></canvas>
+      <div id="rpSyms" class="scroll" style="margin-top:10px;max-height:50vh"></div>
     </div>
-    <div class="note" id="sessexclnote" style="font-size:13px;margin:0 0 10px" hidden></div>
-    <div id="sessverdict" class="note" style="font-size:13.5px;margin:0 0 12px"></div>
-    <div id="sesstable" class="scroll"></div>
-    <details class="tech" style="margin-top:12px"><summary>By hour of day <small>— a finer grain, needs far more trades to mean anything</small></summary>
-      <div class="body"><div id="hourtable" class="scroll"></div></div></details>
+    <div class="note" style="margin-top:10px">Money figures assume every trade risked the same amount (1% of the account)
+      and that every signal was taken. Live, the risk limits skip some overlapping trades, so treat money as an
+      illustration and R as the real measure. The news straddle is not in this replay, because old calendars cannot
+      be replayed honestly.</div>
   </div>
 
-  <div class="card"><h3>How the whole book is doing</h3>
-    <p class="lede">The strategies judged together rather than one at a time. A rule that wins 70% of the
-      time but loses on exactly the days everything else loses is worth less than one that wins when the
-      rest are down — and no per-rule table can show that.</p>
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-      <span class="mut">Showing</span>
-      <select id="pfhours"><option value="168">last 7 days</option><option value="720" selected>last 30 days</option><option value="2160">last 90 days</option><option value="8760">last year</option></select>
-      <span class="mut">Group losses by</span>
-      <select id="pfbucket"><option value="D" selected>day</option><option value="W">week</option></select>
-    </div>
-    <div id="pfhead"></div>
-    <div id="pfco" class="note" style="font-size:13px;margin:12px 0 10px"></div>
-    <div id="pftable" class="scroll"></div>
-    <div class="note">“Cushions drawdown” means removing that rule would make the worst losing stretch
-      <em>deeper</em> — it was winning while the others lost. A rule can lose money overall and still be
-      worth keeping for that reason, which is the whole point of looking at the book instead of the parts.</div>
+  <div class="card section"><h3>Proven on history it was not tuned on?</h3>
+    <p class="lede">A separate background process <abbr class="term" data-term="BACKTEST" tabindex="0">backtests</abbr> every rule,
+      picks its best settings on the first 70% of the history, then scores them on the last 30% it never saw
+      (<abbr class="term" data-term="UNSEEN" tabindex="0">unseen data</abbr>). Each row is one rule on one market: the dot is its
+      average per trade there, a bar is its likely range, and the chip says in words what the
+      <abbr class="term" data-term="GRADES" tabindex="0">evidence</abbr> shows. Hover a row for the detail.</p>
+    <div id="labHead" class="note" style="font-size:13.5px;margin:0 0 10px"></div>
+    <div id="labForest" class="section-viz"></div>
   </div>
 
-  <div class="card"><h3>Which rule is actually working</h3>
-    <p class="lede">Every trading rule over the last 30 days. Rules in watch-only mode place no orders, so
-      they are judged on signals followed to their stop or target on paper. Fewer than about thirty results
-      means a number here is noise, not evidence.</p>
-    <div id="stable" class="scroll"></div></div>
-
-  <details class="tech" open>
+  <details class="tech" open id="labDetails">
     <summary>Backtests on real history <small>— does each rule survive data it was not tuned on?</small></summary>
     <div class="body">
       <div class="note" style="margin:0 0 10px">A separate background process replays the bot's own entry
@@ -120,4 +176,5 @@
         everything. Otherwise it just writes a score beside each signal and changes nothing.</div>
       <div id="mltable" class="scroll"></div></div>
   </details>
-</main><script src="/static/glossary.js"></script><script src="/static/app.js"></script></body></html>
+</main><script src="/static/glossary.js?v=20261029.0038"></script><script src="/static/viz.js?v=20261029.0038"></script><script src="/static/help.js?v=20261029.0038"></script>
+<script src="/static/learn.js?v=20261029.0038"></script><script src="/static/app.js?v=20261029.0038"></script></body></html>

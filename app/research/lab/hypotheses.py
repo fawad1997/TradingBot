@@ -14,6 +14,13 @@ The five rules:
   session_breakout  break of one session's range during the next session (one trade per side per day)
   vwap_reversion    a stretch away from the session VWAP that starts to come back
   htf_continuation  higher-timeframe trend, entered on a pullback to the trigger timeframe's EMA
+
+Two more come from the published evidence rather than from this codebase, and are scored by their own paths
+because neither is a stop/target grid rule:
+  trend_daily        daily time-series momentum (Clenow, "Following the Trend"): a close at a 50-day high with
+                     EMA50 above EMA100, short in reverse; 3 x ATR(100) stop, trailed. app/research/lab/trend.py
+  intraday_momentum  the last 30 minutes before the New York close follow the move since the previous close
+                     (Gao, Han, Li & Zhou 2018; Baltussen, Da, Lammers & Martens 2021). Time exit at the close.
 """
 from __future__ import annotations
 
@@ -215,6 +222,204 @@ def htf_continuation(f: FeatureFrame, htf: Optional[FeatureFrame] = None, params
             out["long"][j] = True
         elif slope[i] <= -need and f.h[j] >= ema[j] and c[j] < ema[j]:
             out["short"][j] = True
+    return out
+
+
+# ------------------------------------------------------------------ 6. daily trend following
+def daily_bars(f: FeatureFrame, until: Optional[int] = None) -> FeatureFrame:
+    """UTC-day bars from an intraday frame, keeping only days that had ENDED by `until` (epoch seconds).
+
+    Default: every day except the newest, which may still be trading. Live passes the close time of the current
+    M15 bar, so a day becomes visible the moment it is over and never before - the same day boundaries the lab
+    uses, which is what keeps the live rule and its backtest on identical bars."""
+    t = np.asarray(f.t, dtype=np.int64)
+    if len(t) == 0:
+        return FeatureFrame([], [], [], [], [], timeframe="D1")
+    day = t // 86400
+    last_open_day = (int(until) // 86400) if until is not None else int(day[-1])
+    keep = day < last_open_day
+    if not keep.any():
+        return FeatureFrame([], [], [], [], [], timeframe="D1")
+    t, day = t[keep], day[keep]
+    o, h, l, c = (np.asarray(x, float)[keep] for x in (f.o, f.h, f.l, f.c))
+    sp, tv = np.asarray(f.spread, float)[keep], np.asarray(f.tick_volume, float)[keep]
+    starts = np.flatnonzero(np.r_[True, day[1:] != day[:-1]])
+    ends = np.r_[starts[1:], len(day)]
+    return FeatureFrame(day[starts] * 86400, o[starts], np.maximum.reduceat(h, starts),
+                        np.minimum.reduceat(l, starts), c[ends - 1],
+                        np.array([float(np.median(sp[a:b])) for a, b in zip(starts, ends)]),
+                        np.add.reduceat(tv, starts), "D1")
+
+
+def session_close_ny(f: FeatureFrame) -> Optional[tuple]:
+    """(hour, minute) in New York time at which this symbol's sessions usually END: the most common close time of
+    each day's last bar. A trading schedule is instrument metadata (MT5 publishes it), not price information, so
+    reading it off the history does not leak future prices into a signal."""
+    from collections import Counter
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    t = np.asarray(f.t, dtype=np.int64)
+    if len(t) < 50:
+        return None
+    bar = int(np.median(np.diff(t)))
+    ny = ZoneInfo("America/New_York")
+    day = t // 86400
+    last = t[np.r_[day[1:] != day[:-1], True]]
+    closes = Counter(_dt.fromtimestamp(int(x) + bar, tz=ny).strftime("%H:%M") for x in last)
+    if not closes:
+        return None
+    hh, mm = closes.most_common(1)[0][0].split(":")
+    return int(hh), int(mm)
+
+
+TREND_DAILY_DEFAULTS = {"breakout_days": 50, "ema_fast": 50, "ema_slow": 100, "atr_days": 100, "stop_atr": 3.0}
+#: The broker needs a take-profit on every position, so the live strategy sets one this far away; the replay uses
+#: the same, so a 25R trend is booked at 20R in both.
+FAR_TARGET_R = 20.0
+
+
+def trend_daily(f: FeatureFrame, htf: Optional[FeatureFrame] = None, params: Optional[dict] = None) -> dict:
+    """On DAILY bars: long when today's close is the highest close of the last `breakout_days` (today included)
+    and EMA(fast) > EMA(slow); short in reverse. `dist` is the stop distance, `stop_atr` x ATR(atr_days), which
+    is also the trailing distance from the best price. Parameters are Clenow's, fixed in advance - no search."""
+    p = {**TREND_DAILY_DEFAULTS, **(params or {})}
+    n = len(f)
+    atr = _atr(f, int(p["atr_days"]))
+    out = _empty(f, atr)
+    out["dist"] = float(p["stop_atr"]) * atr
+    b = int(p["breakout_days"])
+    if n < max(b, int(p["ema_slow"]), int(p["atr_days"])) + 1:
+        return out
+    c = np.asarray(f.c, float)
+    ef, es = np.asarray(f.ema(int(p["ema_fast"])), float), np.asarray(f.ema(int(p["ema_slow"])), float)
+    w = np.lib.stride_tricks.sliding_window_view(c, b)
+    hi, lo = np.full(n, np.nan), np.full(n, np.nan)
+    hi[b - 1:], lo[b - 1:] = w.max(axis=1), w.min(axis=1)
+    ok = np.isfinite(atr) & (atr > 0) & np.isfinite(ef) & np.isfinite(es) & np.isfinite(hi)
+    out["long"] = ok & (c >= hi) & (ef > es)
+    out["short"] = ok & (c <= lo) & (ef < es)
+    return out
+
+
+# ------------------------------------------------------------------ 6b. multi-speed time-series momentum
+#: Lookbacks in CALENDAR days - 1, 3, 6 and 12 months - so a rule on crypto (7 bars a week) and on FX (5-6) looks
+#: back over the same stretch of time. The published speeds, fixed in advance: nothing here is searched.
+TREND_ENSEMBLE_DEFAULTS = {"lookbacks": (30, 91, 182, 365), "atr_days": 100, "stop_atr": 3.0}
+
+
+def trend_ensemble(f: FeatureFrame, htf: Optional[FeatureFrame] = None, params: Optional[dict] = None) -> dict:
+    """On DAILY bars: long while the return over EVERY lookback is positive, short while every one is negative.
+
+    Time-series momentum per speed (Moskowitz, Ooi & Pedersen 2012), blended across speeds as trend funds do
+    (Hurst, Ooi & Pedersen, "A Century of Evidence on Trend-Following"). Requiring all four to agree is the trade
+    form of the blended position: on 2018-2026 daily data for gold, three FX pairs, BTC and ETH, net of the
+    account's spread and swap, the blend made a Sharpe of 0.52 against 0.46 for the 50-day breakout, and +0.29
+    against -0.14 over the second half (screen of 23 Oct 2026). `score` is the average sign across the speeds;
+    `dist` = stop_atr x ATR(atr_days) is the stop and the trailing distance, as in trend_daily."""
+    p = {**TREND_ENSEMBLE_DEFAULTS, **(params or {})}
+    n = len(f)
+    atr = _atr(f, int(p["atr_days"]))
+    out = _empty(f, atr)
+    out["dist"] = float(p["stop_atr"]) * atr
+    out["score"] = np.zeros(n)
+    if n < 2:
+        return out
+    t = np.asarray(f.t, dtype=np.int64)
+    c = np.asarray(f.c, float)
+    lookbacks = [int(x) for x in p["lookbacks"]]
+    ok = np.isfinite(atr) & (atr > 0)
+    score = np.zeros(n)
+    for days in lookbacks:
+        # the last bar at or before `days` calendar days ago: only past timestamps, so causal
+        j = np.searchsorted(t, t - days * 86400, side="right") - 1
+        have = j >= 0
+        r = np.full(n, np.nan)
+        r[have] = c[have] / c[j[have]] - 1.0
+        ok &= np.isfinite(r)
+        score += np.sign(np.nan_to_num(r))
+    score /= len(lookbacks)
+    out["score"] = score
+    out["long"] = ok & (score >= 1.0)
+    out["short"] = ok & (score <= -1.0)
+    return out
+
+
+# ------------------------------------------------------------------ 6c. turn of the month (equity indices)
+TURN_OF_MONTH_DEFAULTS = {"atr_days": 20, "stop_atr": 3.0, "hold_days": 4}
+
+
+def turn_of_month(f: FeatureFrame, htf: Optional[FeatureFrame] = None, params: Optional[dict] = None) -> dict:
+    """On DAILY bars of an equity index: long on the close of the second-to-last weekday of the month, so the
+    position is held through the last trading day and the first three of the next (days -1 to +3).
+
+    McConnell & Xu ("Equity Returns at the Turn of the Month", 2008): over 1926-2005 the whole US equity excess
+    return fell in those four days, and 30 of 34 other countries show it. Long only - the effect is the equity
+    premium arriving at month ends. Weekdays stand in for exchange days (a month-end holiday shifts it by a day).
+    The trade is meant to end after `hold_days` daily bars; `dist` = stop_atr x ATR(atr_days) is a protective stop
+    a normal four days should not reach."""
+    p = {**TURN_OF_MONTH_DEFAULTS, **(params or {})}
+    n = len(f)
+    atr = _atr(f, int(p["atr_days"]))
+    out = _empty(f, atr)
+    out["dist"] = float(p["stop_atr"]) * atr
+    if n < 2:
+        return out
+    import datetime as _dt
+    days = (np.asarray(f.t, dtype=np.int64) // 86400).tolist()
+    for j, d in enumerate(days):
+        day = _dt.date(1970, 1, 1) + _dt.timedelta(days=int(d))
+        if day.weekday() > 4 or not _ok(atr, j):          # a Sunday-evening stub bar is not a trading day
+            continue
+        nxt, left = day + _dt.timedelta(days=1), 0
+        while nxt.month == day.month:                     # weekdays still to come this month
+            left += nxt.weekday() < 5
+            nxt += _dt.timedelta(days=1)
+        out["long"][j] = left == 1
+    return out
+
+
+# ------------------------------------------------------------------ 7. intraday momentum into the close
+def intraday_momentum(f: FeatureFrame, htf: Optional[FeatureFrame] = None, params: Optional[dict] = None) -> dict:
+    """US cash session only: on the bar that closes `minutes_before_close` minutes before the session close (New
+    York time, `close_hour`:`close_minute`), signal in the direction of the move since the previous session's close;
+    the fill is the next bar's open and the trade is meant to be closed at the session close (`hold` bars).
+    Daylight saving comes from zoneinfo, so the UTC times move with New York's clock. A day with no bar closing
+    exactly at the entry time (a half day, a gap) has no signal, and only a bar that closed exactly at the session
+    close sets the reference close for the next day.
+
+    The papers use the exchange close, 16:00. Exness stops its US stock CFDs at 15:45 New York (20 Oct 2026, from
+    the bars themselves), so the lab passes the session close it finds in each symbol's own history."""
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    p = {"minutes_before_close": 30, "close_hour": 16, "close_minute": 0, **(params or {})}
+    out = _empty(f)
+    t = np.asarray(f.t, dtype=np.int64)
+    n = len(t)
+    out["hold"] = 0
+    if n < 50:
+        return out
+    bar = int(np.median(np.diff(t)))
+    if bar <= 0:
+        return out
+    hold = int(p["minutes_before_close"]) * 60 // bar
+    out["hold"] = hold
+    if hold < 1:
+        return out
+    ny = ZoneInfo("America/New_York")
+    dates = sorted({_dt.fromtimestamp(int(x), tz=ny).date() for x in t[::max(1, 3600 // bar)]})
+    atr, c = out["atr"], np.asarray(f.c, float)
+    prev_close = None
+    for d in dates:
+        close_ts = int(_dt(d.year, d.month, d.day, int(p["close_hour"]), int(p["close_minute"]),
+                           tzinfo=ny).timestamp())
+        entry_ts = close_ts - hold * bar
+        # causal: bar j has CLOSED at the entry time; nothing after it is looked at to decide the signal
+        j = int(np.searchsorted(t, entry_ts - bar))
+        if j < n and t[j] == entry_ts - bar and prev_close is not None and _ok(atr, j) and c[j] != prev_close:
+            (out["long"] if c[j] > prev_close else out["short"])[j] = True
+        last = int(np.searchsorted(t, close_ts - bar))
+        if last < n and t[last] == close_ts - bar:
+            prev_close = c[last]                     # used only from the NEXT day on
     return out
 
 

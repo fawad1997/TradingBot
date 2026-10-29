@@ -77,6 +77,7 @@ def trade_metrics(rs: Sequence[float], mfes: Optional[Sequence[float]] = None, m
         "win_rate": _f(len(wins) / n),
         "expectancy_r": _f(mean),
         "avg_r": _f(mean),
+        "sd_r": _f(sd),                  # the selector weighs lab evidence by it (strategy_research's r_sd)
         "median_r": _f(statistics.median(rs)),
         "avg_win_r": _f(statistics.fmean(wins)) if wins else None,
         "avg_loss_r": _f(statistics.fmean(losses)) if losses else None,

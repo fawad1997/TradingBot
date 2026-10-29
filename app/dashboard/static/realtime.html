@@ -1,31 +1,35 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Live · Quantara</title><link rel="icon" type="image/png" href="/static/favicon.png">
-<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25">
+<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25"><meta name="color-scheme" content="dark">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css"></head>
+<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css?v=20261029.0038"></head>
 <body data-page="realtime"><header id="hdr"></header>
 <main>
   <div id="banner" class="banner"></div>
   <div id="top" class="grid cards"></div>
   <div class="grid two section">
     <div class="card"><h3>Trades open now</h3>
-      <p class="lede">Live profit or loss, and how far each one is from its stop and its target.</p>
-      <div id="positions" class="scroll"></div></div>
+      <p class="lede">Live profit or loss, and how far each one is from its <abbr class="term" data-term="STOP" tabindex="0">stop</abbr>
+        (left) and its <abbr class="term" data-term="TARGET" tabindex="0">target</abbr> (right). Hover a bar to see what any price would mean.</p>
+      <div id="positions" class="poslist scroll"></div></div>
     <div class="card"><h3>What the market is doing</h3>
       <p class="lede">Conditions on the symbol this core is watching.</p>
+      <div id="gapGauge" class="gaugebox wide"></div>
       <div id="market"></div></div>
   </div>
   <div class="card section"><h3>Why it is or is not trading</h3>
-    <p class="lede">What each rule saw the last time it looked at the chart.</p>
+    <p class="lede">What each <abbr class="term" data-term="RULE" tabindex="0">rule</abbr> saw the last time it looked at the chart.</p>
     <div id="why"></div></div>
   <div class="grid half section">
     <div class="card"><h3>What just happened</h3>
-      <p class="lede">Live events as they arrive — orders, fills, stops moving, signals blocked.</p>
+      <p class="lede">Live events as they arrive — orders, fills, stops moving, signals blocked. Seafoam is good news,
+        coral is money lost, sand is worth a look.</p>
       <div id="feed" class="feed"><div class="empty"><b>Listening</b>Events appear here the moment they happen.</div></div></div>
     <div class="card"><h3>Finished today</h3>
-      <p class="lede">Trades that opened and closed today, with what each one made or lost.</p>
+      <p class="lede">Trades that opened and closed today, with what each one made or lost. Click a row for the story of that trade.</p>
       <div id="today" class="scroll"></div></div>
   </div>
-</main><script src="/static/glossary.js"></script><script src="/static/app.js"></script></body></html>
+</main><script src="/static/glossary.js?v=20261029.0038"></script><script src="/static/viz.js?v=20261029.0038"></script><script src="/static/help.js?v=20261029.0038"></script>
+<script src="/static/learn.js?v=20261029.0038"></script><script src="/static/app.js?v=20261029.0038"></script></body></html>

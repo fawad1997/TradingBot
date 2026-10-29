@@ -48,6 +48,13 @@ class MultiAssetRunner:
             raise StartupError(f"no configured symbol could start: {failures}")
         for core in self.cores:
             core.portfolio_cores = self.cores
+        # One kill switch for the whole book. A dashboard command is executed by whichever core drains it, so
+        # with a switch per core "Stop all new trades" halted one symbol and "resume" released one symbol.
+        shared = self.cores[0].kill
+        for core in self.cores[1:]:
+            shared.volatile_reasons |= core.kill.volatile_reasons
+            core.kill = shared
+        shared.restore()        # every engage/release is persisted, so the stored state is the latest one
         self.bridge.update_state(symbols=[core.symbol for core in self.cores],
                                   symbol_scan_mode="round_robin")
         self._update_market_status()

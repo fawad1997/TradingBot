@@ -217,7 +217,7 @@ class StraddleManager:
         now = self.now_utc()
         if not self.calendar.coverage_ok(now):
             return
-        ev = self.calendar.next_event(now)
+        ev = self.calendar.next_event(now, getattr(cfg, "currencies", None) or None)
         if ev is None:
             return
         secs = (ev.time - now).total_seconds()
@@ -671,7 +671,7 @@ class StraddleManager:
                         "legs": {l["side"]: {"state": l["state"], "price": l["price"], "volume": l["volume"],
                                              "ticket": l.get("order_ticket")} for l in self._legs()}})
         try:
-            nxt = self.calendar.next_event(self.now_utc())
+            nxt = self.calendar.next_event(self.now_utc(), getattr(self.cfg, "currencies", None) or None)
         except Exception:
             nxt = None
         out["next_event"] = None if nxt is None else {"time": nxt.time.isoformat(), "title": nxt.title}

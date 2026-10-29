@@ -165,7 +165,7 @@ class TestThePagesAskForIt(unittest.TestCase):
 
     def _static(self, name):
         from pathlib import Path
-        return (Path(__file__).resolve().parents[2] / "app" / "dashboard" / "static" / name).read_text()
+        return (Path(__file__).resolve().parents[2] / "app" / "dashboard" / "static" / name).read_text(encoding="utf-8")
 
     def test_the_config_page_has_somewhere_to_put_it(self):
         html = self._static("config.html")

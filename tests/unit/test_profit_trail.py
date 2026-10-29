@@ -22,15 +22,11 @@ def _level(money: float, r: float, risk: float = RISK) -> float:
 
 
 def ladder(peak: float, giveback: float = GIVEBACK) -> float:
-    """Mirror of the lock_target decision in TradeManager.manage()."""
-    small_activation, small_floor = _level(0.20, 0.5), _level(0.05, 0.1)
-    ambition_activation, ambition_floor = _level(0.90, 0.8), _level(0.50, 0.4)
-    if peak >= ambition_activation:
-        return (max(ambition_floor, peak * (1.0 - giveback)) if giveback > 0
-                else max(ambition_floor, peak - (ambition_activation - ambition_floor)))
-    if peak >= small_activation:
-        return max(small_floor, peak * (1.0 - giveback)) if giveback > 0 else small_floor
-    return 0.05
+    """The lock target TradeManager.on_tick sets, from the shared ladder it calls (app/alpha/exits.py)."""
+    from app.alpha.exits import profit_lock_target
+    _, target = profit_lock_target(peak, _level(0.20, 0.5), _level(0.05, 0.1), _level(0.90, 0.8),
+                                   _level(0.50, 0.4), giveback, base_floor=0.05)
+    return target
 
 
 class TestProfitTrail(unittest.TestCase):
@@ -72,11 +68,13 @@ class TestProfitTrail(unittest.TestCase):
         self.assertAlmostEqual(ladder(10.0, giveback=0.0), _level(0.05, 0.1), places=2)
 
     def test_the_live_code_matches_this_ladder(self):
-        """Guard against the mirror above drifting away from trade_manager.py."""
+        """The live manager must use the SAME ladder the backtester and counterfactuals use, not a copy of it."""
         import inspect
+        from app.alpha import exits
         from app.execution.trade_manager import TradeManager
         src = inspect.getsource(TradeManager.on_tick)
-        self.assertIn("max(small_floor, st.profit_high_watermark_money * (1.0 - giveback))", src)
+        self.assertIn("profit_lock_target(", src)
+        self.assertIn("max(small_floor, peak * (1.0 - giveback))", inspect.getsource(exits.profit_lock_target))
 
 
 if __name__ == "__main__":

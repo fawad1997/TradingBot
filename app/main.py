@@ -51,7 +51,11 @@ def setup_logging(level: str = "INFO") -> None:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     # Windows: a browser closing a dashboard connection makes asyncio's Proactor loop log a harmless traceback
     # ("_ProactorBasePipeTransport._call_connection_lost"). It is not an error in the bot; keep it out of the log.
-    logging.getLogger("asyncio").addFilter(lambda r: "_call_connection_lost" not in r.getMessage())
+    # Likewise "socket.send() raised exception.", asyncio's only sign of a write to a connection whose peer has gone:
+    # one line per dropped write, 300 a second on 23 Oct 2026. The dashboard now ends such connections itself
+    # (api.WS_IDLE_SEC) and logs that once.
+    noise = ("_call_connection_lost", "socket.send() raised exception")
+    logging.getLogger("asyncio").addFilter(lambda r: not any(s in r.getMessage() for s in noise))
 
 
 def make_mt5(secrets, cfg):
@@ -619,7 +623,11 @@ def cmd_run(args, cfgm, secrets) -> int:
         app = create_app(bridge, repo_for_dash, core.cfgm, secrets.dashboard_token)
         print(f"\n  Dashboard: http://{cfg.dashboard.host}:{cfg.dashboard.port}\n")
         try:
-            uvicorn.run(app, host=cfg.dashboard.host, port=cfg.dashboard.port, log_level="warning")
+            # A stop must reach the trading core's shutdown. Without a limit uvicorn waits for every dashboard
+            # connection to close, and one whose peer has gone never reports closed: on 23 Oct 2026 Ctrl+C sat
+            # there until a second Ctrl+C forced it.
+            uvicorn.run(app, host=cfg.dashboard.host, port=cfg.dashboard.port, log_level="warning",
+                        timeout_graceful_shutdown=10)
         finally:
             core.stop_event.set()
             th.join(15)

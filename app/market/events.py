@@ -10,7 +10,7 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from app.config import EventsCfg
 from app.core.types import EventState
@@ -47,24 +47,51 @@ def load_events_csv(path: Path) -> List[EconomicEvent]:
     return out
 
 
+def symbol_currencies(spec) -> Optional[set]:
+    """The currencies a symbol moves on, from the broker's own spec (EURUSD -> EUR, USD; NVDA -> USD; gold -> XAU,
+    USD). None when the spec names none, which keeps the calendar unscoped."""
+    got = {str(c).strip().upper() for c in (getattr(spec, "currency_base", ""), getattr(spec, "currency_profit", ""))
+           if c and str(c).strip()}
+    return got or None
+
+
 class EventCalendar:
-    def __init__(self, cfg: EventsCfg, events: Optional[List[EconomicEvent]] = None):
+    """`symbol_currencies` scopes the calendar to one symbol: a UK CPI release puts GBPUSD into PRE_EVENT and leaves
+    NVDA alone. Unscoped (None), every watched event applies, as before."""
+
+    def __init__(self, cfg: EventsCfg, events: Optional[List[EconomicEvent]] = None,
+                 symbol_currencies: Optional[Iterable[str]] = None):
         self.cfg = cfg
-        self.events: List[EconomicEvent] = []
+        self.symbol_currencies = {c.upper() for c in symbol_currencies} if symbol_currencies else None
+        self.all_events: List[EconomicEvent] = []      # every watched event, whatever the symbol
+        self.events: List[EconomicEvent] = []          # the ones that apply to this symbol
         self.loaded_at: Optional[datetime] = None
         if events is not None:
             self.set_events(events)
 
     def set_events(self, events: List[EconomicEvent]) -> None:
-        self.events = sorted([e for e in events if e.impact in self.cfg.impacts and e.currency in self.cfg.currencies],
-                             key=lambda e: e.time)
+        self.all_events = sorted([e for e in events if e.impact in self.cfg.impacts
+                                  and e.currency in self.cfg.currencies], key=lambda e: e.time)
+        self._scope()
         self.loaded_at = datetime.now(timezone.utc)
 
+    def scope_to(self, currencies: Optional[Iterable[str]]) -> None:
+        self.symbol_currencies = {c.upper() for c in currencies} if currencies else None
+        self._scope()
+
+    def _scope(self) -> None:
+        cur = self.symbol_currencies
+        self.events = [e for e in self.all_events if cur is None or e.currency in cur]
+
     def coverage_ok(self, now: datetime) -> bool:
-        """Calendar must contain at least one event in the future or within stale window."""
-        if not self.events:
+        """Calendar must contain at least one event in the future or within stale window.
+
+        Judged on every watched event, not only this symbol's: a quiet fortnight for JPY does not mean the
+        calendar feed is stale."""
+        feed = self.all_events or self.events          # `events` alone when a caller set it directly
+        if not feed:
             return False
-        latest = self.events[-1].time
+        latest = feed[-1].time
         return latest >= now - timedelta(days=self.cfg.stale_after_days)
 
     def state(self, now: datetime) -> EventState:
@@ -85,8 +112,10 @@ class EventCalendar:
                 break
         return st
 
-    def next_event(self, now: datetime) -> Optional[EconomicEvent]:
+    def next_event(self, now: datetime, currencies: Optional[Iterable[str]] = None) -> Optional[EconomicEvent]:
+        """The next event for this symbol, optionally narrowed further to `currencies`."""
+        want = {c.upper() for c in currencies} if currencies else None
         for e in self.events:
-            if e.time >= now:
+            if e.time >= now and (want is None or e.currency in want):
                 return e
         return None

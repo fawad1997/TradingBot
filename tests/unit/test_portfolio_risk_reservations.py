@@ -78,16 +78,17 @@ class TestPortfolioRiskReservations(unittest.TestCase):
         self.assertEqual(results.count("CORRELATED_OPEN_RISK_LIMIT"), 1)
         self.assertEqual(len(repo.select("risk_reservations", {"state": "RESERVED"})), 1)
 
-    def test_insufficient_correlation_history_blocks_new_cluster_exposure(self):
+    def test_insufficient_correlation_history_counts_as_correlated_exposure(self):
         repo = MemoryRepo()
         self.assertIsNone(self.reserve(repo, str(uuid.uuid4()), symbol="EURUSD", risk=1.0))
 
-        result = self.reserve(
-            repo, str(uuid.uuid4()), symbol="GBPUSD", risk=1.0,
-            correlations={"EURUSD": None},
-        )
-
-        self.assertEqual(result, "CORRELATION_HISTORY_INSUFFICIENT:EURUSD")
+        # unmeasurable, so assumed fully correlated: 1 + 1 fits the correlated cap of 5 ...
+        self.assertIsNone(self.reserve(repo, str(uuid.uuid4()), symbol="GBPUSD", risk=1.0,
+                                       correlations={"EURUSD": None}))
+        # ... and 2 already in the group + 4 more does not
+        result = self.reserve(repo, str(uuid.uuid4()), symbol="AAPL", risk=4.0,
+                              correlations={"EURUSD": None, "GBPUSD": None})
+        self.assertEqual(result, "CORRELATED_OPEN_RISK_LIMIT")
 
     def test_uncorrelated_exposures_still_obey_total_portfolio_cap(self):
         repo = MemoryRepo()

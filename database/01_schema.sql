@@ -604,6 +604,21 @@ CREATE TABLE IF NOT EXISTS adaptive_param_history (
 COMMENT ON TABLE adaptive_param_history IS 'Hourly per-symbol adaptive parameter refreshes (audit trail of every change)';
 CREATE INDEX IF NOT EXISTS adaptive_param_history_symbol_idx ON adaptive_param_history (symbol, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS selector_history (
+    id              bigserial PRIMARY KEY,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    symbol          text NOT NULL,
+    strategy_id     text NOT NULL,
+    previous_state  text,
+    state           text NOT NULL,
+    multiplier      double precision NOT NULL,
+    reason          text,
+    applied         boolean NOT NULL,
+    metrics         jsonb
+);
+COMMENT ON TABLE selector_history IS 'Strategy selector state changes per strategy and symbol (audit trail of every change)';
+CREATE INDEX IF NOT EXISTS selector_history_symbol_idx ON selector_history (symbol, strategy_id, created_at DESC);
+
 -- hourly spread profile per symbol (fed by `collect-spreads`, which records every configured symbol)
 CREATE OR REPLACE VIEW v_spread_by_symbol_hour AS
 SELECT symbol, EXTRACT(HOUR FROM time AT TIME ZONE 'UTC')::int AS hour_utc, count(*) AS samples,

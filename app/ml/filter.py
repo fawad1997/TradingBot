@@ -45,7 +45,7 @@ MODEL_DIR = ROOT / "research" / "results" / "ml"
 # price levels and absolute distances differ per symbol and say nothing on their own; ratios do
 EXCLUDE = {"c", "atr_val", "momentum", "stop_distance", "target_distance", "minimum_distance", "spread_price",
            "h4_channel_lower", "h4_channel_upper", "h4_channel_slope", "entry_candidate", "trigger_timeframe"}
-EXCLUDE_PREFIX = ("vision_", "ml_", "research_lab")
+EXCLUDE_PREFIX = ("vision_", "ml_", "research_lab", "selector")
 NESTED = ("microstructure", "context")
 
 
@@ -273,16 +273,17 @@ def train_strategy(rows: List[dict], cfg) -> Dict:
                  and kept - base >= cfg.min_uplift_r)
     status.update(test=test, validated=bool(validated),
                   status="VALIDATED" if validated else "NOT_VALIDATED")
-    # the model that will run live: fitted on ALL rows, weighted the same way, threshold chosen the same way
-    final, t_final = _fit_with_threshold(X, y, r, min_keep, weights)
-    status["threshold"] = round(t_final if t_final is not None else t, 4)
+    # The model that runs live is the one just scored on the unseen 30 %, with ITS threshold. It used to be refitted
+    # on all rows with the threshold re-picked on the newest 20 % of them - inside that test window, against the
+    # rule at the top of this module - so what went live was never what the test had judged (audit, 23 Oct 2026).
+    status["threshold"] = round(t, 4)
     status["features"] = names
     try:
-        imp = sorted(zip(names, final.booster_.feature_importance("gain")), key=lambda x: -x[1])[:12]
+        imp = sorted(zip(names, model.booster_.feature_importance("gain")), key=lambda x: -x[1])[:12]
         status["top_features"] = [[k, round(float(v), 1)] for k, v in imp]
     except Exception:
         pass
-    status["_model"] = final
+    status["_model"] = model
     return status
 
 

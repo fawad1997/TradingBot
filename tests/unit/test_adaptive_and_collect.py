@@ -84,15 +84,21 @@ class TestCollectAllSymbols(unittest.TestCase):
         from app.storage.repo import MemoryRepo
         repo = MemoryRepo()
         args = argparse.Namespace(minutes=0.01, symbols="XAUUSDm,XAUUSD247m,MISSING")
+        current_time = [1000.0]
+
+        def fake_time():
+            return current_time[0]
+
+        def fake_sleep(dt):
+            current_time[0] += 60.0
+
         with mock.patch.object(main, "make_mt5", return_value=FakeMT5()), \
-                mock.patch.object(main, "get_repo", return_value=repo), mock.patch("time.sleep"):
+                mock.patch.object(main, "get_repo", return_value=repo), \
+                mock.patch("time.time", side_effect=fake_time), \
+                mock.patch("time.sleep", side_effect=fake_sleep):
             main.cmd_collect_spreads(args, ConfigManager(), SimpleNamespace())
         syms = {r["symbol"] for r in repo.tables["ticks"]}
         self.assertEqual(syms, {"XAUUSDm", "XAUUSD247m"})
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestWhyNoTrades(unittest.TestCase):
@@ -118,3 +124,7 @@ class TestWhyNoTrades(unittest.TestCase):
             main.cmd_why_no_trades(argparse.Namespace(hours=48), ConfigManager(), SimpleNamespace())
         self.assertIn("SPREAD_ABOVE_MAX", buf.getvalue())
         self.assertIn("EURUSDm", buf.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

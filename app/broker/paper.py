@@ -24,10 +24,14 @@ class PaperBroker(BrokerAdapter):
 
     def __init__(self, data: BrokerAdapter, starting_balance: float = 100.0, slippage_points: float = 0.0,
                  account_mode: str = "PAPER", currency: str = "USD", leverage: int = 500,
-                 state_saver: Optional[Callable[[dict], None]] = None):
+                 state_saver: Optional[Callable[[dict], None]] = None,
+                 commission_per_lot: Optional[Callable[[str], float]] = None):
         self.data = data
         self.balance = float(starting_balance)
         self.slippage_points = slippage_points
+        # round-trip commission per lot for a symbol, booked on the closing deal as MT5 books it; without it a
+        # DRY_RUN result was better than the same trades on an account that charges commission
+        self.commission_per_lot = commission_per_lot or (lambda symbol: 0.0)
         self.account_mode = account_mode
         self.currency = currency
         self.leverage = leverage
@@ -295,9 +299,9 @@ class PaperBroker(BrokerAdapter):
         return err or OrderResult(True, 0, "OK")
 
     def _new_deal(self, pos: Position, side: Side, entry: str, volume: float, price: float, profit: float,
-                  reason: int, comment: str, order: int) -> Deal:
+                  reason: int, comment: str, order: int, commission: float = 0.0) -> Deal:
         d = Deal(ticket=next(self._ticket), order=order, position_id=pos.ticket, symbol=pos.symbol, side=side,
-                 entry=entry, volume=volume, price=price, profit=profit, commission=0.0, swap=0.0, fee=0.0,
+                 entry=entry, volume=volume, price=price, profit=profit, commission=commission, swap=0.0, fee=0.0,
                  magic=pos.magic, comment=comment, time=int(self.data.server_time() or 0), reason=reason)
         self._deals.append(d)
         return d
@@ -366,8 +370,10 @@ class PaperBroker(BrokerAdapter):
     def _close(self, p: Position, volume: float, price: float, reason: int, comment: str) -> Deal:
         volume = min(volume, p.volume)
         profit = self.data.calc_profit(p.symbol, p.side, volume, p.price_open, price) or 0.0
-        self.balance += profit
-        deal = self._new_deal(p, p.side.opposite(), "OUT", volume, price, profit, reason, comment, next(self._ticket))
+        commission = -abs(float(self.commission_per_lot(p.symbol) or 0.0)) * volume
+        self.balance += profit + commission
+        deal = self._new_deal(p, p.side.opposite(), "OUT", volume, price, profit, reason, comment, next(self._ticket),
+                              commission)
         p.volume = round(p.volume - volume, 8)
         if p.volume <= 1e-9:
             self._positions.pop(p.ticket, None)

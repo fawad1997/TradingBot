@@ -18,7 +18,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 log = logging.getLogger(__name__)
 
@@ -280,6 +280,9 @@ class NewsStraddleCfg(BaseModel):
     tp_atr: float = Field(default=2.0, gt=0.0, le=10.0)
     leg_risk_share: float = Field(default=0.5, gt=0.0, le=0.5)
     max_atr_quote_age_sec: float = Field(default=10.0, gt=0.0, le=60.0)  # refuse to arm on a stale quote
+    # Which releases the straddle trades. Separate from events.currencies, which only decides when the other
+    # strategies stand aside: blocking on a UK CPI release is cheap, straddling it is a new trade nobody tested.
+    currencies: List[str] = ["USD"]
     # How many SYMBOLS may hold resting straddle legs at once. Straddle legs are NOT counted against
     # risk.max_concurrent_positions, because OCO guarantees at most one leg per symbol can ever become a
     # position - counting both made the first few symbols eat the whole allowance and silently blocked the
@@ -403,7 +406,24 @@ class ResearchLabCfg(BaseModel):
     startup_delay_seconds: float = Field(default=120.0, ge=0.0, le=3600.0)
     symbols: List[str] = []                       # empty = every broker.symbol_candidates entry
     days_m1: int = Field(default=60, ge=3, le=120)        # needs MT5 "Max bars in chart" >= ~90,000 for 24/7 symbols
-    days_m15: int = Field(default=90, ge=10, le=365)
+    # Longer histories, fetched straight from MT5 (in chunks when one request is refused). 90 days of M15 and 60
+    # of M1 left a 2.5-4 week unseen window, too short to tell an edge from a lucky month. 0 = off (M5 falls back
+    # to resampled M1; no H4 means no daily trend research).
+    days_m15: int = Field(default=730, ge=10, le=1100)
+    days_m5: int = Field(default=365, ge=0, le=730)
+    days_h4: int = Field(default=3650, ge=0, le=7300)
+    # The funnel and the threshold sweep replay every strategy bar by bar; they stay on this recent M15 window.
+    recent_days_m15: int = Field(default=90, ge=10, le=365)
+    # Statistics that count every attempt (app/research/lab/stats.py): a 95% range, the deflated Sharpe, the
+    # probability of backtest overfitting and a random-direction benchmark on every cell, plus as-traded vs
+    # bracket-only exits. Adds an `evidence_grade`; never changes a verdict, the gate or the selector.
+    evidence_enabled: bool = True
+    evidence_min_trades: int = Field(default=20, ge=5, le=1000)
+    # Daily trend following (app/research/lab/trend.py) replayed over the H4 history, and the intraday momentum
+    # test (last 30 minutes before the New York close) on these symbols. Research only.
+    trend_research: bool = True
+    intraday_momentum: bool = True
+    intraday_momentum_symbols: List[str] = ["NVDAm", "TSLAm", "AAPLm", "AMZNm", "MSFTm"]
     # Real spreads: the spread of the first tick of every M1 bar over the most recent N days (0 = bar spreads only).
     tick_spread_days: int = Field(default=14, ge=0, le=60)
     # Trigger timeframes compared each cycle. M1 uses the VectorBT sweep (and drives the live gate); slower ones use
@@ -452,6 +472,11 @@ class ResearchLabCfg(BaseModel):
     # Per-strategy research replays the full M15/H1 (and H4) path, so it is far slower than the
     # micro_scalper fast path. Off by default during a normal cycle; the weekend idle window runs it.
     research_all_in_normal_cycle: bool = False
+    # Nightly re-test (the Holly AI loop): once a day, in the first cycle after this UTC hour, run the per-strategy
+    # research even on a weekday, so the selector and the gate judge each strategy on day-old evidence rather than
+    # last weekend's. 21 = FX rollover, when spreads are wide and little is traded anyway.
+    research_all_nightly: bool = True
+    research_all_nightly_hour_utc: int = Field(default=21, ge=0, le=23)
     # GLOBAL DEFAULTS. These are the fallback for a strategy with no entry in gate_overrides; they are NOT
     # meant to judge every strategy identically. A scalper and a higher-timeframe continuation strategy
     # differ by an order of magnitude in both trade frequency and R dispersion, so one min_trades leaves
@@ -505,6 +530,48 @@ class MLFilterCfg(BaseModel):
     min_uplift_r: float = Field(default=0.05, ge=0.0, le=2.0)
     min_accepted_test: int = Field(default=30, ge=10, le=10000)
     max_model_age_days: float = Field(default=7.0, ge=0.5, le=90.0)
+
+
+class SelectorCfg(BaseModel):
+    """Evidence-driven strategy selection (app/selection/selector.py): each strategy on each symbol earns a share
+    of its normal risk from its own record after costs, and is benched (shadow only) where it loses.
+    mode: "off"; "shadow" = compute, record and show, never change routing; "auto" = apply the multipliers.
+    Multipliers only ever reduce a strategy's configured risk_multiplier."""
+    mode: Literal["off", "shadow", "auto"] = "shadow"
+    interval_minutes: int = Field(default=60, ge=10, le=1440)
+    lookback_days: int = Field(default=120, ge=7, le=730)
+    max_rows: int = Field(default=5000, ge=100, le=100000)
+    prior_r: float = Field(default=-0.05, ge=-1.0, le=0.0)
+    prior_trades: float = Field(default=20.0, ge=1.0, le=1000.0)
+    z: float = Field(default=1.64, ge=0.5, le=4.0)
+    default_sd_r: float = Field(default=1.0, gt=0.0, le=10.0)
+    min_evidence: float = Field(default=30.0, ge=5.0, le=10000.0)
+    min_bench_evidence: float = Field(default=10.0, ge=3.0, le=10000.0)
+    min_live_trades_for_active: int = Field(default=20, ge=0, le=10000)
+    unbench_margin_r: float = Field(default=0.05, ge=0.0, le=1.0)
+    live_weight: float = Field(default=1.0, gt=0.0, le=1.0)
+    counterfactual_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    lab_test_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    lab_train_weight: float = Field(default=0.25, ge=0.0, le=1.0)
+    lab_max_age_hours: float = Field(default=72.0, ge=6.0, le=720.0)
+    # Gates that reject a signal for reasons unrelated to the setup's quality, so the shadow outcome is a fair
+    # sample of the strategy. COST/SPREAD/EDGE/ML_FILTER/EVENT/HEALTH rejections are excluded: those judge the
+    # setup or its fill conditions, so their outcomes are a selected sample. SIZE matters on a small account,
+    # where most signals are refused because the minimum lot is more risk than the budget allows.
+    counterfactual_gates: List[str] = ["STRATEGY_STATUS", "REGIME", "RESEARCH", "SELECTOR", "SYMBOL_DISABLED",
+                                       "PORTFOLIO", "SIZE", "MARGIN", "RISK", "KILL_SWITCH"]
+    active_multiplier: float = Field(default=1.0, gt=0.0, le=1.0)
+    probation_multiplier: float = Field(default=0.5, gt=0.0, le=1.0)
+    unproven_multiplier: float = Field(default=0.25, gt=0.0, le=1.0)
+    regime_veto: bool = True
+
+    @model_validator(mode="after")
+    def ordered_multipliers(self):
+        if not self.unproven_multiplier <= self.probation_multiplier <= self.active_multiplier:
+            raise ValueError("selector multipliers must satisfy unproven <= probation <= active")
+        if self.min_bench_evidence > self.min_evidence:
+            raise ValueError("selector.min_bench_evidence must not exceed min_evidence")
+        return self
 
 
 class CounterfactualCfg(BaseModel):
@@ -594,6 +661,7 @@ class AppConfig(BaseModel):
     research_lab: ResearchLabCfg = ResearchLabCfg()
     context: ContextCfg = ContextCfg()
     ml_filter: MLFilterCfg = MLFilterCfg()
+    selector: SelectorCfg = SelectorCfg()
     counterfactual: CounterfactualCfg = CounterfactualCfg()
     health: HealthCfg = HealthCfg()
     research: ResearchCfg = ResearchCfg()
@@ -619,6 +687,11 @@ class ParamSpec(BaseModel):
 
 
 class StrategyCfg(BaseModel):
+    # Keys this model does not declare - "disabled_reason", the evidence written next to a switched-off rule - are
+    # kept and written back. Ignored, as pydantic does by default, they vanished on the first dashboard
+    # enable / disable / promote, which rewrites strategies.json from this model.
+    model_config = ConfigDict(extra="allow")
+
     id: str
     class_name: str
     version: str
@@ -809,7 +882,7 @@ class ConfigManager:
     def _load_strategies(self) -> StrategiesFile:
         with open(self.strategies_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        data.pop("_comment", None)
+        self._strategies_comment = data.pop("_comment", None)       # written back by _write_strategies
         try:
             sf = StrategiesFile.model_validate(data)
         except ValidationError as e:
@@ -873,7 +946,7 @@ class ConfigManager:
             old = found["enabled"]
             found["enabled"] = bool(enabled)
             self.strategies = StrategiesFile.model_validate(data)
-            self._write_json(self.strategies_path, data)
+            self._write_strategies(data)
             self.app = self.app.model_copy(update={"config_version": self.app.config_version + 1})
             self._write_json(self.config_path, self.app.model_dump())
             return {"config_version": self.app.config_version, "actor": actor,
@@ -895,10 +968,15 @@ class ConfigManager:
             if stats is not None:
                 found["stats"] = stats
             self.strategies = StrategiesFile.model_validate(data)
-            self._write_json(self.strategies_path, data)
+            self._write_strategies(data)
             return {"config_version": self.app.config_version, "actor": actor, "action": "PROMOTE",
                     "path": f"strategies.{sid}.status", "old_value": old,
                     "new_value": {"status": status, "stats": stats}, "reason": reason, "full_config": None}
+
+    def _write_strategies(self, data: dict) -> None:
+        """strategies.json from the model, with the file's own `_comment` kept at the top."""
+        comment = getattr(self, "_strategies_comment", None)
+        self._write_json(self.strategies_path, {"_comment": comment, **data} if comment else data)
 
     @staticmethod
     def _write_json(path: Path, data: dict) -> None:

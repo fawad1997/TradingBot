@@ -85,8 +85,10 @@ def check_frame(frame, build_signals, truncate: int = DEFAULT_TRUNCATE) -> Dict[
     cmp = compare_signals(full, short, cut)
     cmp["bars"] = n
     cmp["truncated_to"] = cut
-    cmp["ok"] = cmp["clean"]
-    cmp["verdict"] = ("No look-ahead detected: both runs agree everywhere they overlap."
+    cmp["ok"] = cmp["clean"] and cmp["compared"] > 0
+    cmp["verdict"] = ("Nothing was compared: the truncated run produced no decisions, so this proves nothing."
+                      if cmp["compared"] == 0 else
+                      "No look-ahead detected: both runs agree everywhere they overlap."
                       if cmp["clean"] else
                       f"LOOK-AHEAD BIAS: {cmp['mismatches']} of {cmp['compared']} overlapping decisions "
                       f"changed when future bars were removed. The backtest is using data it would not "
@@ -98,11 +100,13 @@ def _slice_frame(frame, cut: int):
     """A copy of the frame holding only its first `cut` bars.
 
     Uses the project's own frame_slice where available so the truncation matches exactly what the
-    research code does elsewhere; falls back to a shallow copy for test doubles.
+    research code does elsewhere; falls back to a shallow copy for test doubles. frame_slice cuts by TIME
+    (t < end): it was handed the index `cut`, below which no epoch timestamp lies, so every truncated run on a
+    real frame was EMPTY, nothing was compared, and the check passed whatever it was given (23 Oct 2026).
     """
     try:
         from app.research.data import frame_slice
-        return frame_slice(frame, None, cut)
+        return frame_slice(frame, None, int(frame.t[cut]))       # the first `cut` bars: those before bar `cut`
     except Exception:
         import copy
         out = copy.copy(frame)
@@ -115,39 +119,60 @@ def _slice_frame(frame, cut: int):
         return out
 
 
+def rule_checks(m15=None, h4=None, truncate: int = DEFAULT_TRUNCATE, only=None) -> Dict[str, Any]:
+    """The truncation test on every rule the live strategies trade: the M15 candidate rules (htf_continuation
+    gets its H1 resampled from the SAME, truncated, frame) and the daily rules on daily bars built from H4."""
+    from app.research.lab import data as labdata
+    from app.research.lab.hypotheses import HYPOTHESES, daily_bars, trend_daily, trend_ensemble, turn_of_month
+
+    def decisions(rule, needs_htf=False):
+        def build(f):
+            s = rule(f, labdata.resample(f, 3600)[0] if needs_htf else None, None)
+            return [int(x) - int(y) for x, y in zip(s["long"], s["short"])]
+        return build
+
+    out: Dict[str, Any] = {}
+    if m15 is not None:
+        for name, rule in HYPOTHESES.items():
+            if only in (None, name):
+                out[name] = check_frame(m15, decisions(rule, name == "htf_continuation"), truncate)
+    if h4 is not None:
+        daily = daily_bars(h4)
+        for name, rule in (("trend_daily", trend_daily), ("trend_ensemble", trend_ensemble),
+                           ("turn_of_month", turn_of_month)):
+            if only in (None, name):
+                out[name] = check_frame(daily, decisions(rule), min(truncate, max(1, len(daily) // 4)))
+    return out
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Detect look-ahead bias by truncation (Chan ch.3).")
-    p.add_argument("--m15", required=True, help="path to the M15 CSV, as used by `backtest`")
+    p.add_argument("--symbol", required=True, help="symbol whose cached bars to test (research/lab_data), e.g. XAUUSDm")
+    p.add_argument("--rule", default=None, help="one rule (default: every rule the live strategies trade)")
     p.add_argument("--truncate", type=int, default=DEFAULT_TRUNCATE)
-    p.add_argument("--utc-offset", type=float, default=0.0)
     p.add_argument("--json", action="store_true")
     a = p.parse_args()
 
-    from app.config import ConfigManager
     from app.research.data import load_bars
-    from app.research.lab.signals import apply_volume, trigger_candidates
-
-    frame = load_bars(Path(a.m15), "M15", a.utc_offset)
-    if frame is None or len(frame.c) == 0:
-        print(f"no bars loaded from {a.m15}")
+    root = Path(__file__).resolve().parents[1] / "research"
+    found = {}
+    for tf in ("M15", "H4"):
+        for base in (root / "lab_data", root / "datasets"):
+            path = base / f"{a.symbol}_{tf}.csv"
+            if path.exists():
+                found[tf] = load_bars(path, tf)
+                break
+    if not found:
+        print(f"no cached M15 or H4 bars for {a.symbol} under {root / 'lab_data'} (the research lab writes them)")
         return 2
-
-    cfgm = ConfigManager()
-    micro = next((s for s in cfgm.strategies.strategies if s.id == "micro_scalper"), None)
-    params = dict((micro.params if micro else {}) or {})
-    lookback = int(params.get("volume_lookback", 20))
-    min_rv = float(params.get("minimum_relative_volume", 1.2))
-
-    def build(f):
-        cands = trigger_candidates(f, f, 900, 60, lookback)
-        s = apply_volume(cands, min_rv)
-        return [int(x) - int(y) for x, y in zip(s["long"], s["short"])]
-
-    d = check_frame(frame, build, a.truncate)
-    print(json.dumps(d, indent=2, default=str) if a.json else
-          f"{d.get('verdict')}\n  bars={d.get('bars')} compared={d.get('compared')} "
-          f"mismatches={d.get('mismatches')}")
-    return 0 if d.get("ok") else 1
+    results = rule_checks(found.get("M15"), found.get("H4"), a.truncate, a.rule)
+    if a.json:
+        print(json.dumps(results, indent=2, default=str))
+    else:
+        for name, d in results.items():
+            print(f"{name:<18} {'ok ' if d.get('ok') else 'FAIL'} compared={d.get('compared')} "
+                  f"mismatches={d.get('mismatches')}  {d.get('verdict') or d.get('note')}")
+    return 0 if results and all(d.get("ok") for d in results.values()) else 1
 
 
 if __name__ == "__main__":

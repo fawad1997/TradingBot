@@ -1,10 +1,9 @@
 {
   "_comment": "Runtime configuration for Quantara. environment: DRY_RUN (paper fills on live MT5 data) | SHADOW (signals only) | DEMO (orders on a demo account). REAL order execution is disabled in this release. Risk numbers are CEILINGS, not targets.",
-  "environment": "DRY_RUN",
+  "environment": "DEMO",
   "broker": {
     "symbol_candidates": [
       "XAUUSDm",
-      "XAUUSD247m",
       "BTCUSDm",
       "ETHUSDm",
       "XNGUSDm",
@@ -15,15 +14,14 @@
       "TSLAm",
       "AAPLm",
       "AMZNm",
-      "MSFTm"
+      "MSFTm",
+      "US500m"
     ],
     "magic_number": 20260101,
     "broker_utc_offset_hours": null,
     "connect_timeout_ms": 60000,
     "reconnect_max_attempts": 10,
-    "always_open_symbols": [
-      "XAUUSD247m"
-    ]
+    "always_open_symbols": []
   },
   "sessions": {
     "windows": [
@@ -167,7 +165,10 @@
       "HIGH"
     ],
     "currencies": [
-      "USD"
+      "USD",
+      "EUR",
+      "GBP",
+      "JPY"
     ],
     "stale_after_days": 10
   },
@@ -181,7 +182,6 @@
     "enabled": true,
     "symbols": [
       "XAUUSDm",
-      "XAUUSD247m",
       "BTCUSDm",
       "ETHUSDm",
       "XNGUSDm",
@@ -268,7 +268,10 @@
     "startup_delay_seconds": 120.0,
     "symbols": [],
     "days_m1": 60,
-    "days_m15": 90,
+    "days_m15": 730,
+    "days_m5": 365,
+    "days_h4": 3650,
+    "recent_days_m15": 90,
     "sl_atr_grid": [
       1.0,
       1.5,
@@ -320,7 +323,10 @@
       "mean_reversion_v1",
       "vwap_reversion_v1",
       "htf_continuation_v1"
-    ]
+    ],
+    "evidence_enabled": true,
+    "trend_research": true,
+    "intraday_momentum": true
   },
   "context": {
     "enabled": true,
@@ -372,6 +378,12 @@
     "min_uplift_r": 0.05,
     "min_accepted_test": 30,
     "max_model_age_days": 7.0
+  },
+  "selector": {
+    "mode": "auto",
+    "interval_minutes": 60,
+    "unproven_multiplier": 1.0,
+    "probation_multiplier": 1.0
   },
   "alerts": {
     "enabled": true,

@@ -14,6 +14,7 @@ from typing import Deque, Optional
 
 from app.config import CostCfg
 from app.core.types import Side, SymbolSpec, TradePlan
+from app.market.symbols import lookup
 
 
 @dataclass
@@ -73,7 +74,9 @@ class CostModel:
         # The plan's entry is already ask (BUY) / bid (SELL) and the stop is placed on the
         # exit side, so the ENTRY spread is inside the stop distance. What is NOT inside R:
         # entry slippage, exit slippage on the stop, commission, swap, adverse selection.
-        commission = self.cfg.commission_per_lot_round_trip
+        # the symbol's own commission when one is configured (a stock CFD and EURUSD are not charged alike)
+        commission = float(lookup(self.cfg.symbol_commission_per_lot_round_trip, spec.name,
+                                  self.cfg.commission_per_lot_round_trip))
         swap_pts = spec.swap_long if plan.direction is Side.BUY else spec.swap_short
         swap_per_lot = 0.0
         if spec.swap_mode == 1 and expected_hold_nights > 0:   # swap in points

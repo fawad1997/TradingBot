@@ -30,8 +30,9 @@ Every result carries an `evidence` field so the permit paths are visible rather 
     GATE_OFF    the operator turned the gate off; never blocks, whatever gate_require_evidence says
     MISSING     no research result for this symbol at all
     STALE       a result exists but is older than gate_max_age_hours
-    INCOMPLETE  a result exists but train/test numbers are unusable
-    THIN        fresh and complete, but fewer than gate_min_trades backtest trades behind it
+    INCOMPLETE  a result exists but train/test numbers are unusable, or the lab failed (verdict ERROR, ...)
+    THIN        fresh and complete, but fewer than gate_min_trades backtest trades behind it - or a verdict
+                saying there was too little to measure (TOO_FEW_SIGNALS, NO_QUALIFYING_PARAMETERS, ...)
 """
 from __future__ import annotations
 
@@ -61,6 +62,13 @@ def _age_hours(created_at, now: datetime) -> Optional[float]:
 
 #: evidence states that mean "the lab has not actually judged this symbol/strategy"
 NO_EVIDENCE_STATES = ("MISSING", "STALE", "INCOMPLETE", "THIN")
+
+#: Verdicts the lab writes when it could NOT judge: too little to measure (THIN) or a failure (INCOMPLETE). They
+#: used to come back as evidence "OK" and permit even with gate_require_evidence on (audit, 23 Oct 2026). Any other
+#: verdict - ROBUST_ON_TEST, or anything that is not NOT_ROBUST_ON_TEST - is the lab having looked.
+THIN_VERDICTS = ("TOO_FEW_SIGNALS", "NO_QUALIFYING_PARAMETERS", "INSUFFICIENT_DATA", "TOO_FEW_TRADES",
+                 "TOO_FEW_TEST_TRADES")
+INCOMPLETE_VERDICTS = ("ERROR", "SYMBOL_UNAVAILABLE")
 
 #: Mirrors the defaults declared on ResearchLabCfg. Used only when a config object does not carry the
 #: field at all, so that resolving a threshold can never raise - see the note in Thresholds.pick.
@@ -151,6 +159,9 @@ def evaluate(entry: Optional[dict], created_at, cfg, now: Optional[datetime] = N
         # A result with no verdict at all is not a judgement, whatever else the row contains. Distinguished
         # from a verdict that simply is not NOT_ROBUST_ON_TEST (e.g. ROBUST), which IS the lab having judged.
         return _no_evidence("INCOMPLETE", "research result carries no verdict")
+    if verdict in THIN_VERDICTS or verdict in INCOMPLETE_VERDICTS:
+        return _no_evidence("THIN" if verdict in THIN_VERDICTS else "INCOMPLETE",
+                            f"the lab could not judge this symbol (verdict {verdict})")
     if verdict != "NOT_ROBUST_ON_TEST":
         out["reason"] = f"verdict {verdict}"
         return out

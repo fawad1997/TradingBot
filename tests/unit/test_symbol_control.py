@@ -71,11 +71,14 @@ class TestAlwaysOpen(unittest.TestCase):
         self.assertEqual(SessionClassifier.market_status(sat, always_open=True)["status"], "OPEN")
         self.assertEqual(SessionClassifier.market_status(sat)["status"], "MARKET_CLOSED")
 
-    def test_config_has_symbol(self):
+    def test_config_trades_one_gold_symbol(self):
+        """XAUUSD247m is the same gold as XAUUSDm: trading both took every gold signal twice, and the two biggest
+        losses of 20-22 Oct 2026 were such pairs. XAUUSDm stays - it has ten years of history to research on."""
         from app.config import ConfigManager
         c = ConfigManager().app
-        self.assertIn("XAUUSD247m", c.broker.symbol_candidates)
-        self.assertIn("XAUUSD247m", c.broker.always_open_symbols)
+        self.assertIn("XAUUSDm", c.broker.symbol_candidates)
+        self.assertNotIn("XAUUSD247m", c.broker.symbol_candidates)
+        self.assertNotIn("XAUUSD247m", c.broker.always_open_symbols)
 
 
 if __name__ == "__main__":

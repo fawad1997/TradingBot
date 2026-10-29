@@ -27,6 +27,7 @@ from app.microstructure.flow import FlowAnalyzer
 from app.microstructure.book import BookTracker
 from app.adaptive.optimizer import AdaptiveState, compute as adaptive_compute
 from app.alpha.counterfactuals import CounterfactualTracker
+from app.alpha.exits import with_execution_exits
 from app.broker.base import BrokerAdapter, BrokerError
 from app.broker.paper import PaperBroker
 from app.config import ConfigError, ConfigManager, Secrets
@@ -48,7 +49,7 @@ from app.execution.trade_manager import TradeManager
 from app.features.frame import FeatureFrame
 from app.governance.health import BotStatusMonitor, FastHealth, StrategyHealthMonitor, strategy_health_key
 from app.market.bars import BarStore, required_bars
-from app.market.events import EconomicEvent, EventCalendar
+from app.market.events import EconomicEvent, EventCalendar, symbol_currencies
 from app.market.sessions import SessionClassifier
 from app.market.ticks import SpreadCollector, TickValidator
 from app.notifications.base import Notifier
@@ -65,6 +66,11 @@ from app.strategies.registry import build as build_strategy
 from app.market.symbols import contains as symbol_in, lookup as symbol_lookup, resolve as resolve_symbol_name
 
 log = logging.getLogger("core")
+
+# Selector input rows per (repo, strategy, version), shared by every core: the cores run round-robin on one thread,
+# so without this each of 13 symbols would re-read the same cross-symbol history and stall the loop at once.
+_SELECTOR_ROWS: Dict[tuple, tuple] = {}
+SELECTOR_ROWS_TTL_SEC = 300.0
 
 
 def _side_sign(direction) -> int:
@@ -100,6 +106,7 @@ class _SyncTelemetry:
 
 class TradingCore:
     STORE_TFS = ["H4", "H1", "M15", "M5", "M1"]
+    _broker_offset_warned = False          # one warning per process, not one per symbol core
 
     def __init__(self, cfgm: ConfigManager, data_broker: BrokerAdapter, repo: Repository, secrets: Secrets,
                  bridge: Optional[Bridge] = None, notifier: Optional[Notifier] = None, telemetry=None,
@@ -125,8 +132,12 @@ class TradingCore:
         if exec_broker is not None:
             self.exec_broker = exec_broker
         elif self.env is Environment.DRY_RUN:
+            cost = self.cfg.cost
             self.exec_broker = PaperBroker(data_broker, self.cfg.paper.starting_balance, self.cfg.paper.slippage_points,
-                                           state_saver=lambda st: self.repo.set_flag("paper_state", st, "paper"))
+                                           state_saver=lambda st: self.repo.set_flag("paper_state", st, "paper"),
+                                           commission_per_lot=lambda sym: symbol_lookup(
+                                               cost.symbol_commission_per_lot_round_trip, sym,
+                                               cost.commission_per_lot_round_trip))
         else:
             self.exec_broker = data_broker
         self.paper = self.exec_broker if isinstance(self.exec_broker, PaperBroker) else None
@@ -173,6 +184,10 @@ class TradingCore:
         # "strategies" block when research_all_strategies is on. micro_scalper keeps using lab_hint so its
         # behaviour is unchanged; the rest are recorded and only block if added to gate_strategies.
         self.strategy_lab_hints: dict = {}
+        self.strategy_lab_created_at = None
+        # {strategy_id: Allocation} for THIS symbol from the strategy selector; restored on startup so a
+        # benched strategy stays benched across restarts.
+        self.allocations: dict = {}
         self._ml = None
         self.book_tracker = BookTracker()
         self._book_next = 0.0
@@ -326,6 +341,7 @@ class TradingCore:
             raise StartupError(f"none of {candidates} available. Broker has: {found[:20]}")
         self.spec = chosen
         self.symbol = chosen.name
+        self.calendar.scope_to(symbol_currencies(chosen))     # this symbol's releases only (EURUSD: EUR + USD)
         self.sessions.always_open = symbol_in(self.cfg.broker.always_open_symbols, self.symbol)
         if self.sessions.always_open:
             log.info("%s is configured as an always-open (24/7) symbol - weekend closure not applied", self.symbol)
@@ -338,6 +354,7 @@ class TradingCore:
             self.adaptive.restore(self.repo.get_flag(f"adaptive:{self.symbol}"))
         except Exception as e:
             log.info("adaptive state not restored: %s", e)
+        self._restore_selector()
         self.ledger.insert("symbols", {"captured_at": utcnow(), "account_login": acct.login, "symbol": chosen.name,
                                        "digits": chosen.digits, "point": chosen.point, "tick_size": chosen.tick_size,
                                        "tick_value": chosen.tick_value, "contract_size": chosen.contract_size,
@@ -361,9 +378,12 @@ class TradingCore:
         # ---------------- DATA HYDRATION
         self._set_state(StartupState.DATA_HYDRATION)
         lookbacks: Dict[str, List[int]] = {tf: [] for tf in self.STORE_TFS}
+        required: Dict[str, List[int]] = {tf: [] for tf in self.STORE_TFS}   # what must exist to START
         for s in self.strategies.values():
             for tf, n in s.lookbacks().items():
                 lookbacks.setdefault(tf, []).append(n)
+            for tf, n in s.min_history().items():
+                required.setdefault(tf, []).append(n)
         lookbacks["H1"].append(self.regime.lookback())
         h = self.cfg.hydration
         tick = self.data.tick(self.symbol)
@@ -375,7 +395,9 @@ class TradingCore:
             series = self.data.rates(self.symbol, tf, need + 1)
             got = store.hydrate(series, server_now)
             self.stores[tf] = store
-            min_required = max(lookbacks.get("H4") or [1]) if tf == "H4" else need * 0.9
+            # H4: fetch for the longest lookback, but refuse to start only below what a strategy cannot do without
+            # (trend_daily_v1 asks for ~3,900 H4 bars and needs none - it reports INSUFFICIENT_HISTORY instead).
+            min_required = max(required.get("H4") or [1]) if tf == "H4" else need * 0.9
             if tf in ("H4", "H1", "M15") and got < min_required:
                 raise StartupError(f"{tf}: only {got} closed bars available, {min_required:g} required. "
                                    f"Open the {self.symbol} {tf} chart in MT5 to download history.")
@@ -433,7 +455,8 @@ class TradingCore:
                                         ambition_floor_money=self.cfg.execution.ambition_floor_money,
                                         protection_safety_buffer_points=self.cfg.execution.protection_safety_buffer_points,
                                         sl_modification_cooldown_sec=self.cfg.execution.sl_modification_cooldown_sec,
-                                        close_when_profit_lock_unprotectable=self.cfg.execution.close_when_profit_lock_unprotectable)
+                                        close_when_profit_lock_unprotectable=self.cfg.execution.close_when_profit_lock_unprotectable,
+                                        clock=self.wall)
             self.manager.floor_r = self._floor_r()
             self.manager.min_sl_step_r = float(self.cfg.execution.min_sl_step_r)
             self.manager.profit_lock_cost_multiple = float(self.cfg.execution.profit_lock_cost_multiple)
@@ -623,6 +646,13 @@ class TradingCore:
             return
         if self._seen_first_tick:
             self.clock.observe(tick.time, fresh=True)
+            if self.clock.offset_seconds and not TradingCore._broker_offset_warned:
+                TradingCore._broker_offset_warned = True
+                hours = self.clock.offset_seconds / 3600
+                log.warning("broker server clock is UTC%+.2g h. Rules that read the hour or the day straight from "
+                            "bar times (session_breakout_v1, the daily bars of trend_daily_v1 / trend_ensemble_v1 / "
+                            "turn_of_month_v1, intraday momentum) assume bars stamped in UTC, as Exness stamps them; "
+                            "on this server they act %g h early.", hours, hours)
         self._seen_first_tick = True
         self._prev_tick_msc = tick.time_msc
         self.last_tick = tick
@@ -763,7 +793,8 @@ class TradingCore:
         session = self.sessions.classify(utc)
         regime = self.regime.with_fast_stress(self.health.spread_shock)
         routes = route(self.cfgm.strategies.strategies, regime, self.env, self.shealth.state,
-                       self.cfg.research.shadow_strategies_enabled)
+                       self.cfg.research.shadow_strategies_enabled,
+                       self.allocations if self.cfg.selector.mode == "auto" else None)
         ff_m1 = self.ff.get("M1")
         ff_h4 = self.ff.get("H4")
         m15_close = int(ff_m.t[ff_m.last]) + 900
@@ -789,6 +820,11 @@ class TradingCore:
                                                     "data": snap})
         bar_time = int(ff_m1.t[ff_m1.last]) if ff_m1 else int(ff_m.t[ff_m.last])
         for c in self.cfgm.strategies.strategies:
+            # A strategy's `symbols` list was never enforced: every strategy ran on every symbol. trend_daily_v1
+            # leaves out natural gas (its decade replay lost -0.40R a trade, swap alone 0.23R), so it is now.
+            if c.symbols and "*" not in c.symbols and not symbol_in(c.symbols, self.symbol):
+                self.diagnostics[c.id] = ["NOT_CONFIGURED_FOR_THIS_SYMBOL"]
+                continue
             strat = self.strategies.get(c.id)
             rr = routes.get(c.id)
             if strat is None or rr is None:
@@ -833,6 +869,9 @@ class TradingCore:
             evaluation_id = self._record_candidate_evaluation(
                 c.id, "CANDIDATE", "STRATEGY", "", bar_time,
                 details={"strategy_reasons": res.reasons})
+            # The exit as it will actually be TRADED (breakeven + profit lock from `execution`), so the trade, its
+            # counterfactual and its stored exit_plan all carry the same rules the trade manager applies.
+            res.plan.exit_model = with_execution_exits(res.plan.exit_model, self.cfg.execution)
             sig = Signal(id=new_id(), strategy_id=c.id, strategy_version=c.version, symbol=self.symbol,
                          created_at=utcnow(), created_broker_time=now_b,
                          valid_until_broker=now_b + res.plan.ttl_seconds, snapshot_id=snapshot_id, plan=res.plan,
@@ -918,7 +957,7 @@ class TradingCore:
         try:
             if strategy_id != "micro_scalper":
                 entry = (self.strategy_lab_hints or {}).get(strategy_id)
-                state = evaluate(entry, self.lab_hint_created_at, self.cfg.research_lab, self.now_utc(),
+                state = evaluate(entry, self.strategy_lab_created_at, self.cfg.research_lab, self.now_utc(),
                                  strategy_id=strategy_id)
                 state["timeframe"] = "M15"
                 state["strategy_id"] = strategy_id
@@ -1009,6 +1048,10 @@ class TradingCore:
                             if self.flow is not None and self.cfg.microstructure.attach_to_signals else {}),
                          **({"research_lab": {"verdict": self.lab_hint.get("verdict"), "best": self.lab_hint.get("best"),
                                               "test": self.lab_hint.get("test")}} if self.lab_hint else {}),
+                         **({"selector": {"state": a.state, "multiplier": a.multiplier,
+                                          "posterior_r": round(a.posterior_r, 4), "lower_r": round(a.lower_r, 4),
+                                          "n_eff": round(a.n_eff, 1), "applied": self.cfg.selector.mode == "auto"}}
+                            if (a := self.allocations.get(sig.strategy_id)) is not None else {}),
                          **({"context": ctx} if (ctx := self._context_features()) else {})}})
         sig.meta["stored_features"] = stored["features"]
         sig.meta["created_at_utc"] = sig.created_at
@@ -1073,6 +1116,7 @@ class TradingCore:
             return
         if not rr.executable:
             gate = Gate.STRATEGY_STATUS if str(rr.eligibility) == "RESEARCH_ONLY" else (
+                Gate.SELECTOR if rr.reason.startswith("selector") else
                 Gate.HEALTH if "health" in rr.reason or "stress" in rr.reason else Gate.REGIME)
             self._reject(sig, gate, rr.reason, {"eligibility": str(rr.eligibility)}, status="SHADOW")
             return
@@ -1089,34 +1133,10 @@ class TradingCore:
         if blocked:
             self._reject(sig, Gate.ML_FILTER, blocked[0], blocked[1])
             return
-        if self.kill.blocking:
-            self._reject(sig, Gate.KILL_SWITCH, self.kill.reason or ",".join(self.kill.volatile_reasons))
+        blocker = self._entry_blocker(scfg, sig.session, sig.event_state)
+        if blocker is not None:
+            self._reject(sig, *blocker)
             return
-        if self.risk is None or self.risk.state in (RiskState.NO_NEW_TRADES, RiskState.EMERGENCY):
-            self._reject(sig, Gate.RISK, f"RISK_STATE_{self.risk.state if self.risk else 'UNKNOWN'}")
-            return
-        loss_streak, loss_blocked = self._loss_guard()
-        if loss_blocked:
-            self._reject(sig, Gate.RISK, "SYMBOL_LOSS_COOLDOWN",
-                         {"symbol": self.symbol, "consecutive_losses": loss_streak,
-                          "cooldown_minutes": self.cfg.risk.loss_circuit_breaker_cooldown_minutes})
-            return
-        rep = self.health.report(self.now_utc())
-        blockers = [b for b in rep.blockers if b != "SPREAD_SHOCK"]
-        if blockers:
-            self._reject(sig, Gate.HEALTH, ",".join(blockers), rep.details)
-            return
-        if scfg.allowed_sessions and sig.session not in scfg.allowed_sessions:
-            self._reject(sig, Gate.SESSION, f"SESSION_{sig.session}_NOT_ALLOWED")
-            return
-        ev = EventState(sig.event_state)
-        if self.cfg.events.mode == "block":
-            if ev in (EventState.PRE_EVENT, EventState.EVENT):
-                self._reject(sig, Gate.EVENT, f"EVENT_STATE_{ev}")
-                return
-            if ev is EventState.UNKNOWN and self.env is Environment.REAL:
-                self._reject(sig, Gate.EVENT, "EVENT_CALENDAR_MISSING_OR_STALE")
-                return
         if not self._global_positions_known:
             self._reject(sig, Gate.PORTFOLIO, "BROKER_POSITIONS_UNKNOWN")
             return
@@ -1173,8 +1193,38 @@ class TradingCore:
             return
         self._execute(sig, rr, est, tick)
 
+    def _entry_blocker(self, scfg, session: str, event_state: str) -> Optional[tuple]:
+        """(gate, reason, details) for the first entry check that fails NOW, or None.
+
+        Shared by a new signal and by one waiting for its spread to narrow. That wait can last the signal's whole
+        TTL (up to 15 minutes), and re-checking only the kill switch let a waiting signal trade after the daily
+        loss limit, a loss cooldown, a stale feed or a news window had stopped new entries (audit, 23 Oct 2026)."""
+        if self.kill.blocking:
+            return Gate.KILL_SWITCH, self.kill.reason or ",".join(self.kill.volatile_reasons), None
+        if self.risk is None or self.risk.state in (RiskState.NO_NEW_TRADES, RiskState.EMERGENCY):
+            return Gate.RISK, f"RISK_STATE_{self.risk.state if self.risk else 'UNKNOWN'}", None
+        loss_streak, loss_blocked = self._loss_guard()
+        if loss_blocked:
+            return Gate.RISK, "SYMBOL_LOSS_COOLDOWN", {
+                "symbol": self.symbol, "consecutive_losses": loss_streak,
+                "cooldown_minutes": self.cfg.risk.loss_circuit_breaker_cooldown_minutes}
+        rep = self.health.report(self.now_utc())
+        blockers = [b for b in rep.blockers if b != "SPREAD_SHOCK"]
+        if blockers:
+            return Gate.HEALTH, ",".join(blockers), rep.details
+        if scfg.allowed_sessions and session not in scfg.allowed_sessions:
+            return Gate.SESSION, f"SESSION_{session}_NOT_ALLOWED", None
+        ev = EventState(event_state)
+        if self.cfg.events.mode == "block":
+            if ev in (EventState.PRE_EVENT, EventState.EVENT):
+                return Gate.EVENT, f"EVENT_STATE_{ev}", None
+            if ev is EventState.UNKNOWN and self.env is Environment.REAL:
+                return Gate.EVENT, "EVENT_CALENDAR_MISSING_OR_STALE", None
+        return None
+
     def _process_pending(self, tick: Tick) -> None:
         now_b = self.server_now()
+        utc = self.clock.to_utc(tick.time)
         keep = []
         for item in self.pending:
             sig = item["signal"]
@@ -1186,6 +1236,12 @@ class TradingCore:
                 continue
             if not self._symbol_enabled():
                 self._reject(sig, Gate.SYMBOL_DISABLED, "SYMBOL_TRADING_STOPPED_WHILE_WAITING")
+                continue
+            # the session and the news window as they are now, not as they were when the signal was made
+            blocker = self._entry_blocker(item["scfg"], str(self.sessions.classify(utc)), str(self.calendar.state(utc)))
+            if blocker is not None:
+                gate, reason, details = blocker
+                self._reject(sig, gate, reason, {**(details or {}), "while_waiting_for_spread": True})
                 continue
             ok, _ = self._spread_ok(tick, sig.session, sig.plan.stop_distance)
             if ok:
@@ -1310,7 +1366,8 @@ class TradingCore:
         net: Dict[str, float] = {}
         for position in (self.positions_cache or []):
             try:
-                sign = 1.0 if int(getattr(position, "type", 0)) == 0 else -1.0
+                # Position carries `side`; it has no MT5-style `type`, which read as 0 (long) for every position
+                sign = float(position.side.sign)
                 net[position.symbol] = net.get(position.symbol, 0.0) + sign * float(position.volume)
             except Exception:                                        # noqa: BLE001
                 continue
@@ -1428,6 +1485,14 @@ class TradingCore:
         sc = self.cfg.scaling
         if not sc.enabled or exposure.get("pending_signals"):
             return None
+        # A strategy can refuse to add to an open position (trend_daily_v1: its research holds one position per
+        # symbol, so adds would trade something the lab never tested).
+        try:
+            spec = self.cfgm.strategy(sig.strategy_id).params.get("allow_scale_in")
+        except Exception:
+            spec = None
+        if spec is not None and not bool(spec.value):
+            return None
         mine = [t for t in active_trades if t.get("symbol") == self.symbol]
         if not mine or len(mine) >= sc.max_positions_per_symbol or exposure.get("broker_positions", 0) > len(mine):
             return None
@@ -1538,9 +1603,11 @@ class TradingCore:
         for c in self.cfgm.strategies.strategies:
             health_key = strategy_health_key(c.id, c.version)
             try:
+                # the NEWEST 1,000, oldest first: health reads the end of the list as "recent", so the ascending
+                # select this replaced judged a strategy past 1,000 trades on its first 1,000 for good
                 rows = self.repo.select("trades", {"strategy_id": c.id, "strategy_version": c.version,
                                                     "state": ["CLOSED", "BROKER_CLOSED"]},
-                                        order_by="closed_at", limit=1000)
+                                        order_by="closed_at", desc=True, limit=1000)[::-1]
             except Exception as e:
                 log.exception("strategy health history query failed for %s", health_key)
                 h = StrategyHealth.RESTRICTED
@@ -1577,9 +1644,11 @@ class TradingCore:
                 self.strategy_lab_hints = {
                     sid: (symbol_lookup(per_sym or {}, self.symbol, None) or {})
                     for sid, per_sym in ((latest.get("strategies") or {}).items())}
+                # per-strategy research is carried forward between cycles, so it has its own age
+                self.strategy_lab_created_at = latest.get("strategies_created_at") or latest.get("created_at")
             except Exception:
                 self.lab_hint, self.lab_hint_created_at = {}, None
-                self.strategy_lab_hints = {}
+                self.strategy_lab_hints, self.strategy_lab_created_at = {}, None
             # Alert per gated strategy on its own verdict, not one verdict relabelled for each of them.
             for sid in self.cfg.research_lab.gate_strategies:
                 state = self.research_gate(sid)
@@ -1592,9 +1661,14 @@ class TradingCore:
                     self._alert("WARNING" if state["blocked"] else "INFO",
                                 f"{sid} on {self.symbol} {'BLOCKED' if state['blocked'] else 'unblocked'} by research "
                                 f"lab: {state['reason']}")
+        if self.cfg.selector.mode != "off" and self._every("selector", self.cfg.selector.interval_minutes * 60.0):
+            self._run_selector()
         if self.cfg.calendar_sync.enabled and self._every("calendar_reload", 300.0):
             self._reload_calendar()
-        if self.account is not None:
+        # Every symbol core sees the same account, so only the first one records it; one row a minute per core put
+        # 13 identical rows a minute in account_snapshots (23 Oct 2026).
+        cores = getattr(self, "portfolio_cores", None)
+        if self.account is not None and (not cores or cores[0] is self):
             a = self.account
             self.telemetry.enqueue("account_snapshots", {"created_at": utcnow(), "environment": str(self.env),
                                                          "balance": a.balance, "equity": a.equity, "margin": a.margin,
@@ -1727,6 +1801,58 @@ class TradingCore:
                                                "max_spread_points": self.adaptive.max_spread_points})
         except Exception:
             log.exception("adaptive parameter refresh failed for %s; keeping previous values", self.symbol)
+
+    def _restore_selector(self) -> None:
+        from app.selection.selector import Allocation
+        try:
+            saved = self.repo.get_flag(f"selector:{self.symbol}") or {}
+            self.allocations = {sid: Allocation.from_dict(d) for sid, d in (saved.get("allocations") or {}).items()}
+        except Exception as e:
+            log.info("selector state not restored: %s", e)
+            self.allocations = {}
+
+    def _run_selector(self) -> None:
+        """Re-score every strategy on this symbol from its account trades, shadow outcomes and research. Best
+        effort: a failure keeps the previous allocations."""
+        from app.selection.selector import allocate_strategy
+        cfg = self.cfg.selector
+        try:
+            now = self.wall()
+            new = {}
+            for c in self.cfgm.strategies.strategies:
+                key = (id(self.repo), c.id, c.version)
+                hit = _SELECTOR_ROWS.get(key)
+                if hit is not None and hit[3] is self.repo and 0.0 <= now - hit[0] < SELECTOR_ROWS_TTL_SEC:
+                    trades, cfs = hit[1], hit[2]
+                else:
+                    trades = self.repo.select("trades", {"strategy_id": c.id, "strategy_version": c.version,
+                                                         "state": ["CLOSED", "BROKER_CLOSED"]},
+                                              order_by="closed_at", desc=True, limit=cfg.max_rows) or []
+                    cfs = self.repo.select("counterfactuals", {"strategy_id": c.id, "status": "RESOLVED"},
+                                           order_by="resolved_at", desc=True, limit=cfg.max_rows) or []
+                    _SELECTOR_ROWS[key] = (now, trades, cfs, self.repo)
+                new[c.id] = allocate_strategy(c.id, c.version, self.symbol, trades, cfs,
+                                              self.strategy_lab_hints.get(c.id), self.strategy_lab_created_at,
+                                              self.allocations.get(c.id), cfg, now)
+            applied = cfg.mode == "auto"
+            changes = [(sid, self.allocations.get(sid), a) for sid, a in new.items()
+                       if self.allocations.get(sid) is None or self.allocations[sid].state != a.state
+                       or set(self.allocations[sid].vetoed_regimes) != set(a.vetoed_regimes)]
+            self.allocations = new
+            self.repo.set_flag(f"selector:{self.symbol}",
+                               {"computed_at": utcnow().isoformat(), "mode": cfg.mode,
+                                "allocations": {sid: a.to_dict() for sid, a in new.items()}}, "selector")
+            for sid, before, a in changes:
+                self.telemetry.enqueue("selector_history", {
+                    "created_at": utcnow(), "symbol": self.symbol, "strategy_id": sid,
+                    "previous_state": before.state if before else None, "state": a.state,
+                    "multiplier": a.multiplier, "reason": a.reason, "applied": applied, "metrics": a.to_dict()})
+                if before is not None:
+                    veto = f"; benched in {', '.join(a.vetoed_regimes)}" if a.vetoed_regimes else ""
+                    self._alert("INFO", f"Strategy selector: {sid} on {self.symbol} {before.state} -> {a.state} "
+                                        f"({a.reason}{veto})" + ("" if applied else " - shadow mode, not applied"))
+        except Exception:
+            log.exception("strategy selector failed for %s; keeping previous allocations", self.symbol)
 
     def _m15_atr(self) -> Optional[float]:
         m15 = self.ff.get("M15")

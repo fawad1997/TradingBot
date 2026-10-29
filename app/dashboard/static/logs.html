@@ -1,16 +1,17 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>History · Quantara</title><link rel="icon" type="image/png" href="/static/favicon.png">
-<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25">
+<link rel="manifest" href="/static/manifest.json"><meta name="theme-color" content="#030F25"><meta name="color-scheme" content="dark">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css"></head>
+<meta name="apple-mobile-web-app-title" content="Quantara"><link rel="stylesheet" href="/static/style.css?v=20261029.0038"></head>
 <body data-page="logs"><header id="hdr"></header>
 <main>
   <div id="banner" class="banner"></div>
   <p class="note" style="margin:0 0 10px">Everything the bot has recorded. Pick what you want to look at.</p>
   <div class="tabs" id="tabs"></div>
   <div class="card">
+    <p id="tabnote" class="tabnote"></p>
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
       <span class="mut">Show</span><select id="limit"><option>100</option><option selected>200</option><option>500</option><option>2000</option></select>
       <span class="mut">Summarise over</span><select id="cfdays"><option value="1">today</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">a year</option></select>
@@ -19,4 +20,5 @@
     <div id="cfsum" class="note" style="display:none;font-size:13px;margin:0 0 10px"></div>
     <div id="logtable" class="scroll" style="max-height:70vh"></div>
   </div>
-</main><script src="/static/glossary.js"></script><script src="/static/app.js"></script></body></html>
+</main><script src="/static/glossary.js?v=20261029.0038"></script><script src="/static/viz.js?v=20261029.0038"></script><script src="/static/help.js?v=20261029.0038"></script>
+<script src="/static/learn.js?v=20261029.0038"></script><script src="/static/app.js?v=20261029.0038"></script></body></html>

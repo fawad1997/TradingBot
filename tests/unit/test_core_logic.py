@@ -333,13 +333,13 @@ class TestConfigSafety(unittest.TestCase):
     def test_versioned_and_persisted(self):
         rec = self.m.apply_change("risk.kelly_fraction", 0.2, "t", "research says so")
         self.assertEqual(rec["old_value"], 0.25)
-        self.assertEqual(json.loads((self.d / "config.json").read_text())["risk"]["kelly_fraction"], 0.2)
+        self.assertEqual(json.loads((self.d / "config.json").read_text(encoding="utf-8"))["risk"]["kelly_fraction"], 0.2)
         self.assertEqual(rec["config_version"], 2)
 
     def test_param_registry_violation(self):
-        data = json.loads((self.d / "strategies.json").read_text())
+        data = json.loads((self.d / "strategies.json").read_text(encoding="utf-8"))
         data["strategies"][0]["params"]["h1_adx_min"]["value"] = 99
-        (self.d / "strategies.json").write_text(json.dumps(data))
+        (self.d / "strategies.json").write_text(json.dumps(data), encoding="utf-8")
         with self.assertRaises(ConfigError):
             ConfigManager(self.d / "config.json", self.d / "strategies.json")
 

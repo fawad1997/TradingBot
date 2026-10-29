@@ -9,8 +9,12 @@ from app.strategies.candidates import CANDIDATE_CLASSES
 from app.strategies.mean_reversion_v1 import MeanReversionV1
 from app.strategies.micro_scalper import MicroScalper
 from app.strategies.pullback_v1 import PullbackV1
+from app.strategies.trend_daily import TrendDaily
+from app.strategies.trend_ensemble import TrendEnsemble
+from app.strategies.turn_of_month import TurnOfMonth
 
 CLASSES = {"PullbackV1": PullbackV1, "MeanReversionV1": MeanReversionV1, "MicroScalper": MicroScalper,
+           "TrendDaily": TrendDaily, "TrendEnsemble": TrendEnsemble, "TurnOfMonth": TurnOfMonth,
            **CANDIDATE_CLASSES}
 
 

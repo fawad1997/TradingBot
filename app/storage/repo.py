@@ -97,6 +97,7 @@ def _reservation_block_reason(trades: List[dict], reservations: List[dict], sign
 
     if existing_total + risk_money > max_total_risk:
         return "PORTFOLIO_OPEN_RISK_LIMIT"
+    missing = float((portfolio_cfg or {}).get("missing_correlation_value", 1.0))
     correlated_total = risk_money
     for other_symbol, amount in exposure.items():
         if amount <= 0:
@@ -106,10 +107,13 @@ def _reservation_block_reason(trades: List[dict], reservations: List[dict], sign
         else:
             correlation = correlations.get(other_symbol)
             if correlation is None or not math.isfinite(float(correlation)):
-                return f"CORRELATION_HISTORY_INSUFFICIENT:{other_symbol}"
+                # Unmeasurable: assume the worst (fully correlated, as the diversified mode does) and let the
+                # correlated cap decide. A stock CFD trades ~9 h a day - about 200 hourly returns in 30 days
+                # against the 400 asked for - so refusing outright froze every other symbol whenever one stock
+                # position was open: 34 approved orders cancelled, 20-22 Oct 2026.
+                correlation = missing
         # NOTE: abs() here cannot tell "doubling up" from "partly offset" - direction is not consulted
-        # at all in gross mode. The diversified mode fixes that; this branch is kept byte-identical so
-        # switching modes is the only thing that changes behaviour.
+        # at all in gross mode. The diversified mode fixes that.
         if abs(float(correlation)) >= correlation_threshold:
             correlated_total += amount
     if correlated_total > max_correlated_risk:
@@ -263,7 +267,7 @@ class MemoryRepo(Repository):
             if order_by:
                 rows.sort(key=lambda r: (r.get(order_by) is None, r.get(order_by) if r.get(order_by) is not None else 0),
                           reverse=desc)
-            return rows[:limit] if limit else rows
+            return rows[:limit] if limit is not None else rows      # limit=0 is zero rows, not the whole table
 
     def reserve_portfolio_risk(self, account_key: str, signal_id: str, trade_id: str, symbol: str,
                                risk_money: float, max_total_risk: float, max_correlated_risk: float,
@@ -520,7 +524,7 @@ class PostgresRepo(Repository):
             sql += " WHERE " + " AND ".join(clauses)
         if order_by:
             sql += f" ORDER BY {_ident(order_by)} {'DESC' if desc else 'ASC'}"
-        if limit:
+        if limit is not None:              # limit=0 is zero rows; read as "no limit" it returned all of app_logs
             sql += f" LIMIT {int(limit)}"
         rows = self._run(sql, params, fetch=True) or []
         return [self._normalize(r) for r in rows]
@@ -545,17 +549,22 @@ class PostgresRepo(Repository):
                     cur.execute("BEGIN")
                     cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (account_key,))
                     cur.execute("SELECT id, signal_id, symbol, initial_risk_money, state FROM trades "
-                                "WHERE state = ANY(%s)",
-                                (list(_ACTIVE_RISK_STATES + _TERMINAL_RISK_STATES),))
-                    all_trades = cast(List[Dict[str, Any]], cur.fetchall())
-                    trades = [row for row in all_trades if row["state"] in _ACTIVE_RISK_STATES]
+                                "WHERE state = ANY(%s)", (list(_ACTIVE_RISK_STATES),))
+                    trades = cast(List[Dict[str, Any]], cur.fetchall())
                     active_trade_ids = {str(row["id"]) for row in trades}
-                    terminal_trade_ids = {str(row["id"]) for row in all_trades
-                                          if row["state"] in _TERMINAL_RISK_STATES}
                     cur.execute("SELECT id, signal_id, trade_id, symbol, risk_money, expires_at "
                                 "FROM risk_reservations WHERE account_key = %s AND state = 'RESERVED'",
                                 (account_key,))
                     reservations = cast(List[Dict[str, Any]], cur.fetchall())
+                    # Only the finished trades these reservations point at: reading every terminal trade made each
+                    # order scan the whole closed history.
+                    waiting = [row["trade_id"] for row in reservations
+                               if row.get("trade_id") is not None and str(row["trade_id"]) not in active_trade_ids]
+                    terminal_trade_ids = set()
+                    if waiting:
+                        cur.execute("SELECT id FROM trades WHERE id = ANY(%s) AND state = ANY(%s)",
+                                    (waiting, list(_TERMINAL_RISK_STATES)))
+                        terminal_trade_ids = {str(row["id"]) for row in cur.fetchall()}
                     valid_reservations: List[Dict[str, Any]] = []
                     for row in reservations:
                         if str(row["trade_id"]) in active_trade_ids:

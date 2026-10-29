@@ -119,7 +119,7 @@ class TestEndpoint(unittest.TestCase):
 class TestThePageAsksForIt(unittest.TestCase):
     def _static(self, name):
         from pathlib import Path
-        return (Path(__file__).resolve().parents[2] / "app" / "dashboard" / "static" / name).read_text()
+        return (Path(__file__).resolve().parents[2] / "app" / "dashboard" / "static" / name).read_text(encoding="utf-8")
 
     def test_the_checkbox_exists(self):
         html = self._static("analysis.html")

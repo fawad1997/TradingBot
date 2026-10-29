@@ -1,14 +1,13 @@
 """What the research gate actually enforces - written down so it cannot drift silently.
 
-These are characterisation tests, not a fix. They pin the gate's real behaviour against the five explanations
-for why micro_scalper keeps trading while losing: stale evidence, verdict semantics, timeframe mismatch, a
-routing bypass, or an enforcement bug.
+These pin the gate's real behaviour against the five explanations for why micro_scalper kept trading while
+losing: stale evidence, verdict semantics, timeframe mismatch, a routing bypass, or an enforcement bug.
 
-The finding that matters: evaluate() reads NO numbers unless the stored verdict is exactly
-NOT_ROBUST_ON_TEST. The lab can write seven different verdicts. Six of them pass through unblocked however bad
-the measured expectancy is - including NO_QUALIFYING_PARAMETERS, which means no setting in the whole sweep
-produced even gate_min_trades trades, and TOO_FEW_SIGNALS / INSUFFICIENT_DATA / ERROR, which mean the lab could
-not measure anything at all. "We could not measure it" is currently treated the same as "it passed".
+The finding that mattered: evaluate() reads NO numbers unless the stored verdict is exactly
+NOT_ROBUST_ON_TEST, and the verdicts that mean the lab could not measure anything - NO_QUALIFYING_PARAMETERS,
+TOO_FEW_SIGNALS, INSUFFICIENT_DATA, ERROR - used to come back as evidence "OK", so they permitted even with
+gate_require_evidence on. Since 23 Oct 2026 they come back as THIN / INCOMPLETE: still permitted by default
+(the gate fails open by design), blocked when evidence is required.
 """
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -36,12 +35,25 @@ class TestVerdictSemantics(unittest.TestCase):
                     if evaluate({"verdict": v, **AWFUL}, FRESH, cfg(), NOW)["blocked"]]
         self.assertEqual(blocking, ["NOT_ROBUST_ON_TEST"])
 
-    def test_unmeasurable_verdicts_pass_through_catastrophic_numbers(self):
-        """The core of the finding: 'could not measure' is treated as 'passed'."""
-        for v in ("NO_QUALIFYING_PARAMETERS", "TOO_FEW_SIGNALS", "INSUFFICIENT_DATA", "ERROR"):
+    def test_unmeasurable_verdicts_are_no_evidence_not_a_pass(self):
+        """'Could not measure' is not 'passed': it is labelled as missing evidence, which permits by default."""
+        for v, state_name in (("NO_QUALIFYING_PARAMETERS", "THIN"), ("TOO_FEW_SIGNALS", "THIN"),
+                              ("INSUFFICIENT_DATA", "THIN"), ("ERROR", "INCOMPLETE"),
+                              ("SYMBOL_UNAVAILABLE", "INCOMPLETE")):
             state = evaluate({"verdict": v, **AWFUL}, FRESH, cfg(), NOW)
             self.assertFalse(state["blocked"], v)
-            self.assertEqual(state["reason"], f"verdict {v}")
+            self.assertEqual(state["evidence"], state_name, v)
+            self.assertIn(v, state["reason"])
+
+    def test_unmeasurable_verdicts_block_when_evidence_is_required(self):
+        """The contract gate_require_evidence promises - and tools/live_readiness.py relies on for real money."""
+        strict = cfg().model_copy(update={"gate_require_evidence": True})
+        for v in ("NO_QUALIFYING_PARAMETERS", "TOO_FEW_SIGNALS", "INSUFFICIENT_DATA", "ERROR"):
+            state = evaluate({"verdict": v, **AWFUL}, FRESH, strict, NOW)
+            self.assertTrue(state["blocked"], v)
+            self.assertIn("RESEARCH_LAB_NO_EVIDENCE", state["reason"])
+        self.assertFalse(evaluate({"verdict": "ROBUST_ON_TEST", **AWFUL}, FRESH, strict, NOW)["blocked"],
+                         "a judged, passing verdict is evidence")
 
     def test_the_numbers_are_never_even_read_for_those_verdicts(self):
         """pooled_r stays None, proving the gate returned before reaching the arithmetic."""

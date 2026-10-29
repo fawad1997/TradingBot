@@ -26,7 +26,7 @@ from app.core.bridge import Bridge
 from app.dashboard.api import STATIC, create_app
 from app.storage.repo import MemoryRepo
 
-PAGES = ["/", "/realtime", "/logs", "/config", "/analysis"]
+PAGES = ["/", "/realtime", "/logs", "/config", "/analysis", "/learn"]
 
 
 def client():

@@ -121,9 +121,106 @@ simulation only; it does not enable or imply live/Demo grid execution.
   reward:risk, so the strategy was negative by construction. Three changes: `cost.max_spread_fraction_of_stop` (0.10)
   rejects or WAITs on any signal whose stop is less than 10x the spread; micro_scalper floors its stop at
   `min_stop_spread_multiple` (10) x the live spread; and `min_reward_risk` sets the target from the final stop.
+* **Strategy selector** (`selector` in config.json, `app/selection/selector.py`, **mode `auto`**): the Holly-AI /
+  Cryptohopper idea without the marketing. Every hour each symbol re-scores every strategy from its own record after
+  costs: closed account trades (full weight), shadow counterfactuals rejected by quality-independent gates (half weight)
+  and fresh per-strategy lab research at live parameters (test half, train quarter weight). The mean is shrunk toward a
+  -0.05R prior over 20 pseudo-trades. ACTIVE (lower bound > 0 and >= 20 account trades) trades at 1.0x, PROBATION
+  (positive estimate) 0.5x, UNPROVEN (< 30 evidence trades) 0.25x, BENCHED (negative estimate, or upper bound < 0) goes
+  to shadow only (gate `SELECTOR`) and must reach +0.05R to return. A strategy that loses in one H1 regime across all
+  symbols is benched in that regime only. Multipliers only ever REDUCE the strategy's `risk_multiplier`; entry rules,
+  parameters, statuses and risk limits are never changed. State persists in `system_flags` (`selector:<symbol>`),
+  changes are logged to `selector_history` and alerted, and every signal stores its selector state in
+  `features.selector`. Dashboard -> Analysis -> "How much each rule is allowed to trade". `mode: "shadow"` computes and
+  records without changing routing; `"off"` restores the previous behaviour exactly.
+* **Demo sizing**: on the DEMO account `selector.unproven_multiplier` and `probation_multiplier` are 1.0, so only
+  BENCHED strategies change size (to shadow). At $500 equity and 1% risk the minimum lot does not fit a 25% budget on
+  any symbol for the candidate strategies, so graded sizing would have produced no account trades to learn from.
+  Restore 0.25 / 0.5 before any real money.
+* **Daily records** (`scripts\9_daily_records.bat`, Windows task **"Quantara daily records"**, every day 08:15 local
+  = 00:15 UTC, runs late if the PC was off): `tools/daily_review.py` writes yesterday's review to
+  `research/reports/daily/<day>.md` (+ `.json`) - account, every closed trade, open positions, why signals were
+  refused, paper results of refused signals, selector state and changes, research verdicts, alerts from the log, the
+  all-time record per strategy with 95% ranges, and a "Look at" list. `tools/backup_db.py` writes a verified
+  `pg_dump` to `backups/` (newest 14 + first of each month kept; every dump holds all records). Run either by hand any
+  time (`python tools/daily_review.py --day today`). Remove the task with
+  `Unregister-ScheduledTask -TaskName 'Quantara daily records'`. Nothing in the database is ever deleted.
+* **Auto-start**: Windows task **"Quantara bot at logon"** runs `scripts\start_bot_hidden.ps1` 1 minute after you log
+  in. It starts the bot in the background (no window) unless one is already running, and notes each attempt in
+  `logs\autostart.log`. Remove with `Unregister-ScheduledTask -TaskName 'Quantara bot at logon'`.
+* **One kill switch for all symbols**: in multi-symbol mode every core now shares one kill switch. Before, a dashboard
+  halt or resume was executed by whichever core drained the command, so "Stop all new trades" stopped one symbol.
+* **Nightly per-strategy research**: `research_lab.research_all_nightly` (on, after 21:00 UTC) runs the per-strategy
+  replay once a day instead of only at weekends. A cycle that does not run it now carries the previous result forward
+  with its own `strategies_created_at`; before, the next 6-hourly cycle silently dropped it and every strategy except
+  micro_scalper ran the week with no research evidence.
 * **Profit lock**: when the stop cannot be tightened (broker minimum distance), the position is now KEPT on its existing
   broker stop and retried instead of being closed at market - set `execution.close_when_profit_lock_unprotectable` to
   restore the old behaviour.
+
+## Evidence-first research and daily trend following (20 Oct 2026)
+Why: a search of the published evidence (papers, independent replications, popular YouTube systems) found one family
+with strong out-of-sample support - daily trend following / time-series momentum - and found that most intraday
+edges, where they exist, are about the size of a retail CFD spread (the 2026 replication of the opening-range-
+breakout paper: gross edge reproduced, net about zero on five index CFDs). Quantara's own lab could not tell an edge
+from luck: of 195 rule x symbol x timeframe cells, 22 of the 46 that reached walk-forward were positive, which is
+what noise gives.
+* **Evidence grade** (`app/research/lab/stats.py`, `evidence.py`; `research_lab.evidence_enabled`): every lab cell and
+  every per-strategy result now carries a `stats` block - the 95% range of R per trade (moving-block bootstrap), the
+  per-trade Sharpe deflated by the number of cells the cycle LOOKED AT (Bailey & Lopez de Prado), the probability of
+  backtest overfitting over the stop/target grid (CSCV), and a random-direction benchmark (the same entries and the
+  same bracket with random sides). `evidence_grade` is **EDGE** only when the range is above zero, DSR >= 0.95 and
+  random sides do worse at p < 0.05; otherwise NO_EDGE_SHOWN, NEGATIVE (range below zero) or THIN (< 20 trades). The
+  existing `verdict` fields, the research gate and the selector are unchanged. Shown in the daily report ("Research
+  evidence") and on Dashboard -> Analysis (candidate-rule and timeframe tables).
+* **Longer history**: `days_m15` 730, `days_m5` 365, `days_h4` 3650 fetched straight from MT5; a long request MT5
+  refuses ("Invalid params") is retried and then fetched in 90-day chunks. Bar spreads on the long history are scaled
+  up by each symbol's median tick/bar spread ratio over the 60-day M1 overlap (`bar_spread_scale`). Exness history on
+  20 Oct 2026: H4 from 2016 for gold/EURUSD/GBPUSD/GBPJPY, 2018 for BTC/ETH, 2022 for gas, Aug 2025 for the stock
+  CFDs. The funnel and threshold sweep stay on `recent_days_m15` (90) because they replay every strategy bar by bar;
+  the nightly per-strategy research now covers the full two years (expect it to take about an hour).
+* **One exit rule everywhere**: the profit-lock ladder moved from `TradeManager.on_tick` to
+  `app/alpha/exits.py::profit_lock_target` (same logic, proven equal to the old code on 5,000 random cases). The
+  engine attaches the account's breakeven + lock levels to every plan's exit model (`with_execution_exits`), and
+  `SimulatedTrade` - the backtester and the counterfactual tracker - now applies them, so research and "would have
+  been" results judge the exit that actually trades. Before, both left breakeven and the lock out entirely. A strategy
+  can opt out with `exit_model.profit_lock.enabled: false`. The lab reports `as_traded` vs `bracket` on identical
+  entries; changing the live exit stays a separate decision made on that evidence.
+* **`trend_daily_v1`** (`app/strategies/trend_daily.py`, research in `app/research/lab/trend.py`, status DEMO):
+  Clenow's rule with his parameters, fixed in advance - a close at a 50-day high with EMA50 > EMA100 (short in
+  reverse), stop 3 x ATR(100 days) trailed at the same fixed distance from the best price (chandelier), no
+  breakeven, no profit lock, a 20R take-profit only because the broker requires one, one position per symbol
+  (`allow_scale_in: false`). Built on UTC daily bars from the H4 store; the live class calls the same function the lab
+  replays. Decade replay before going live (13 symbols, 372 trades, after spread, slippage and real swap): +0.084R a
+  trade, 95% range -0.013 to +0.204, PSR 0.94, +0.136R better than random sides (p 0.005) - NO_EDGE_SHOWN, not
+  NEGATIVE, so DEMO for incubation. Natural gas (-0.40R, swap 0.23R a trade) and XAUUSD247m (duplicate gold) are left
+  out of its `symbols`. With the account's profit lock the same entries made gold +0.07R instead of +0.35R.
+* **Strategy `symbols` are enforced**: the engine never read this field - every strategy ran on every symbol. A
+  strategy now runs only where its list allows (`*` = all, unchanged for every other strategy).
+* **Intraday momentum test** (`research_lab.intraday_momentum`, research only): the last 30 minutes before the close
+  in the direction of the move since the previous close (Gao et al. 2018; Baltussen et al. 2021), on the five stock
+  CFDs, time exit at the close (daylight saving from zoneinfo). **Exness stops its US stock CFDs at 15:45 New York**,
+  not 16:00, so the lab reads each symbol's session close from its own bars (`session_close_ny`). First result,
+  NVDAm over a year: -0.25R a trade on unseen data (range -0.49 to -0.03), and random sides lose as much - the spread
+  is too large next to a 30-minute move. Graded like every other cell; no live class unless it earns EDGE.
+* **Backtester uses each plan's own exit**: it used to trade every signal with the strategy's static `exit_model`,
+  so per-trade values (the trend trail distance) were ignored and trend trades got an M15 trail. Live trades always
+  carried the plan's model; now the backtest does too.
+* **Startup needs less than hydration fetches**: a strategy can ask hydration for history (`lookbacks`) without
+  requiring it to start (`min_history`). trend_daily_v1 fetches ~3,900 H4 bars, requires none and reports
+  INSUFFICIENT_HISTORY when short, so a thin history cannot stop a symbol. Its daily decision is cached per completed
+  day and H4 bar (the two-year backtest went from ~5 minutes a symbol to ~25 s).
+* **Lab runtime**: with two years of M15, a year of M5 and the evidence statistics, a cycle takes roughly 5-6 minutes a
+  symbol, and the nightly per-strategy research about 10 minutes a symbol (~2 hours for 13), in the low-priority
+  research process.
+* **Local LLM endpoint**: the owner's freellmapi router (`AI_BASE_URL` / `AI_API_KEY` in `.env`, OpenAI-compatible)
+  routes prompts to free cloud models, so data sent there leaves the PC. Nothing uses it yet; if it is ever used it is
+  advisory (e.g. a written summary of the daily review), never a trade gate - an LLM's opinion on past bars cannot be
+  backtested honestly because it has seen those prices.
+* **Demo balance**: the owner moved the Exness demo to $5,000 (Personal Area -> Set Balance) so daily-stop trades fit the
+  minimum lot (at $500 a 3 x daily-ATR stop at 0.01 lot risked 3-38% per trade). The daily report shows a balance change
+  that no closed trade explains as **Deposit / top-up**, never as profit. Gold still needs ~$19k for 1% risk at the
+  minimum lot, so its trend signals are tracked as "would have been" results.
 
 ## Quick start (Windows)
 ```
@@ -196,3 +293,67 @@ scripts/    Windows launchers
 tests/      unit/, chaos/, integration/
 logs/       quantara.log, critical_journal.jsonl (only if the database ever fails)
 ```
+
+## Full-history replay report and per-symbol news calendar (20 Oct 2026)
+
+- **Replay report** (`app/research/lab/replay.py`): every configured strategy over all the M15 history the broker
+  gives (730 days asked; Exness has about 2 years for FX, metals, crypto and gas, 14 months for stock CFDs and 10
+  for XAUUSD247), pooled across symbols. Per rule and per symbol it gives trades, win rate, average R with a
+  block-bootstrap 95% range, total R, profit factor, max drawdown in R, worst losing run, best and worst month,
+  R by quarter, the account curve, and the unseen last 30% kept separate. trend_daily_v1 comes from the lab's
+  daily replay of all H4 history (pre-registered, so it has no held-out stretch).
+- Produced by `python tools/backtest_report.py [--symbols ...] [--workers 3]` (MT5 data only, low priority,
+  about 8 min per symbol per worker; it writes nothing to the DB) and refreshed by the nightly per-strategy lab
+  run. Output: `research/results/backtest/<stamp>.json` and `latest.json`. `research_one(..., keep_trades=True)`
+  carries the trades; the nightly run pops them before the lab stores its results.
+- Shown on Analysis → "Every rule replayed over the last two years" (`/api/backtest/latest`, `?trades=<rule>` for
+  one rule's trades) and in the daily review's "Full-history replay" section. The money column is an
+  illustration at `risk.research_risk_fraction` of equity; R is the measure.
+- **News calendar per symbol**: `events.currencies` now USD, EUR, GBP, JPY. Each core's `EventCalendar` is
+  scoped to its symbol's currencies from the MT5 spec (`symbol_currencies`: EURUSD → EUR+USD, GBPJPY → GBP+JPY,
+  NVDA/gas → USD, gold → XAU+USD), so a UK release stops GBP pairs only. Coverage (stale feed) is judged on the
+  whole watched feed. The news straddle trades only `news_straddle.currencies` (default USD), so widening the
+  blocking calendar did not widen the straddle.
+- The bot reads no news headlines and uses no AI or LocalPilot: the calendar (FairEconomy weekly JSON, hourly)
+  is its only news input.
+
+## Audit fixes, one gold symbol, two new daily strategies (23 Oct 2026)
+Why: the account-value chart showed about a day whatever range was picked, the database had grown to 10 GB in three
+days, and an external audit listed further defects; each was checked against the code before it was changed.
+* **Account-value chart** (`/api/equity`): the newest snapshot of each time bucket over the whole window, chosen in
+  SQL. It read the newest 20,000 rows and filtered afterwards; 13 cores wrote the same account every minute, so that
+  was 26 hours. Only the first portfolio core now records the account (one row a minute, not 13).
+* **Dead dashboard connections**: a connection silent for `api.WS_IDLE_SEC` (150 s; the page pings every 20 s) is
+  closed. asyncio drops writes to a connection whose peer has gone without raising, so the broadcaster kept writing
+  to ~75 of them: 300 "socket.send() raised exception." warnings a second, 47 million app_logs rows (9.7 GB), and
+  quantara.log rotating every 16 minutes. The warning is filtered; the page clears its ping timer on reconnect.
+* **Correlation check** (gross mode): a pair whose correlation cannot be measured counts as fully correlated
+  (`risk.missing_correlation_value`, as the diversified mode does) instead of refusing the trade. Stock CFDs give
+  ~200 hourly returns in 30 days against the 400 required, so one open stock position cancelled 34 approved orders.
+* **Waiting signals**: a signal queued for its spread re-checks risk state, the loss cooldown, health blockers,
+  session and the news window on every pass (`TradingCore._entry_blocker`, shared with new signals).
+* **Research gate**: verdicts that mean the lab could not judge (TOO_FEW_SIGNALS, NO_QUALIFYING_PARAMETERS,
+  INSUFFICIENT_DATA, ERROR, ...) are evidence THIN / INCOMPLETE, so `gate_require_evidence` blocks them.
+* **Research costs**: the per-strategy backtester and `tools/backtest_report.py` receive commission in money per
+  lot (`_commission_money`); they were handed the fast simulator's price distance. Dormant while commission is 0.
+* Strategy health reads the newest 1,000 trades; `_open_directions_by_symbol` reads `Position.side`; idle research
+  rows use the table's columns; `limit=0` is zero rows; dashboard windows are filtered in SQL and query parameters
+  are clamped; the selector's `r_sd` is filled (`trade_metrics` returns `sd_r`); the ML filter deploys the model and
+  threshold that were judged on the unseen 30%; `strategies.json` keeps `disabled_reason` and `_comment` through
+  dashboard rewrites; per-symbol commission in the cost model and on DRY_RUN closing deals; a bar that closed against
+  a trade is ordered peak-first when a newly armed profit lock is tested (MT5's tester order); the session review's
+  slippage takes the symbol from the trade and the point from its spec; positions with no stop show "no stop".
+* **Look-ahead check** (`tools/lookahead_check.py`): it truncated by handing `frame_slice` a bar INDEX where it
+  expects a TIMESTAMP, so every truncated run was empty and the check passed anything. It now cuts by index and
+  fails when nothing was compared; `--symbol XAUUSDm` checks every traded rule on the lab's cached bars (all pass).
+* `tools/bump_dashboard_version.py --help` prints help; it had written `?v=--help` into every page.
+* **One gold symbol**: XAUUSD247m removed (same gold as XAUUSDm, 10 months of history; the two biggest losses of
+  20-22 Oct were the same signal taken on both). The intraday strategies' `"*"` became the explicit list they
+  traded, so adding a symbol no longer adds it to them.
+* **trend_ensemble_v1** (DEMO, x0.5, the six symbols with 8-10 years of history): long while the 1-, 3-, 6- and
+  12-month returns are all positive, short while all are negative (calendar-day lookbacks); trend_daily's exit.
+  Replayed by the lab as `trend_ensemble`. Pre-registered replay: 537 trades, +0.069R (95% -0.013..+0.159),
+  NO_EDGE_SHOWN - weaker than trend_daily on the same symbols (324 trades, +0.140R, 95% +0.029..+0.265, EDGE).
+* **turn_of_month_v1** (DEMO, x0.5, US500m): long from the last trading day of the month through the third of the
+  next (McConnell & Xu 2008), protective 3 x ATR(20) stop, time exit after 4 trading days of M15 bars. Replayed as
+  `turn_of_month`; this account holds ~1 year of US500m, so the replay is 12 trades - a check of the calendar only.
